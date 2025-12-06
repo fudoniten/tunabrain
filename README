@@ -1,0 +1,7 @@
+# Tuna Brain
+
+Tuna Brain is a service to support Tunarr Scheduler, a service for using LLMs to
+schedule content on Tunarr television channels.
+
+Tuna Brain harnesses LangChain to enable powerful interactions with LLM
+backends, to enable tagging, planning, scheduling, categorization, and more.
