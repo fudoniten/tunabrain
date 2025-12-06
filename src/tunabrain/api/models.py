@@ -17,6 +17,10 @@ class MediaItem(BaseModel):
     rating: Optional[str] = Field(None, description="Content rating, e.g. TV-14")
     CriticalRating: Optional[float] = Field(None, description="Critic rating, from 1 to 10")
     AudienceRating: Optional[float] = Field(None, description="Audience rating, from 1 to 10")
+    current_tags: List[str] = Field(
+        default_factory=list,
+        description="Existing tags already assigned to the media that should be reviewed",
+    )
 
 
 class Channel(BaseModel):
@@ -30,6 +34,10 @@ class TaggingRequest(BaseModel):
     """Request to generate scheduling-oriented tags for a media item."""
 
     media: MediaItem
+    existing_tags: List[str] = Field(
+        default_factory=list,
+        description="Preferred tags to reuse when generating a final tag set",
+    )
 
 
 class TaggingResponse(BaseModel):

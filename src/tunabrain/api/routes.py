@@ -27,7 +27,7 @@ async def health() -> dict[str, str]:
 
 @router.post("/tags", response_model=TaggingResponse)
 async def tag_media(request: TaggingRequest) -> TaggingResponse:
-    tags = await generate_tags(request.media)
+    tags = await generate_tags(request.media, request.existing_tags)
     return TaggingResponse(tags=tags)
 
 
