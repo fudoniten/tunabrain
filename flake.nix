@@ -25,6 +25,25 @@
             export PYTHONPATH=${builtins.getEnv "PWD"}/src:$PYTHONPATH
           '';
         };
+
+        checks.tests = pkgs.stdenv.mkDerivation {
+          pname = "tunabrain-tests";
+          version = "0.1.0";
+          src = ./.;
+          buildInputs = [ pythonEnv pkgs.python311Packages.pytest ];
+
+          buildPhase = ''
+            runHook preBuild
+            export HOME=$TMPDIR
+            export PYTHONPATH=$PWD/src:$PYTHONPATH
+            pytest -q
+            runHook postBuild
+          '';
+
+          installPhase = ''
+            mkdir -p $out
+          '';
+        };
       }
     );
 }
