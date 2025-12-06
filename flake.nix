@@ -16,8 +16,23 @@
           ps.pydantic
           ps.langchain
           ps.langchain-core
+          ps.httpx
         ]);
+        tunabrainServer = pkgs.writeShellApplication {
+          name = "tunabrain-server";
+          runtimeInputs = [ pythonEnv pkgs.python311 ];
+          text = ''
+            export PYTHONPATH=${./src}:$PYTHONPATH
+            exec python -m tunabrain "$@"
+          '';
+        };
       in {
+        packages.default = tunabrainServer;
+
+        apps.default = flake-utils.lib.mkApp {
+          drv = tunabrainServer;
+        };
+
         devShells.default = pkgs.mkShell {
           name = "tunabrain-dev";
           packages = [ pythonEnv pkgs.ruff pkgs.python311Packages.pytest ];
