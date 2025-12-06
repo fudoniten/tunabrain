@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from typing import Iterable, List
 
-from langchain.output_parsers import OutputFixingParser
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from pydantic import BaseModel, Field
@@ -39,16 +38,10 @@ async def generate_tags(
     llm = get_chat_model()
     llm_with_tools = llm.bind_tools([WikipediaLookupTool(debug=debug_enabled)])
 
-    parser = OutputFixingParser.from_llm(
-        llm,
-        PydanticOutputParser(pydantic_object=TaggingResult),
-    )
+    parser = PydanticOutputParser(pydantic_object=TaggingResult)
 
-    chunk_parser = OutputFixingParser.from_llm(
-        llm,
-        PydanticOutputParser(
-            pydantic_object=TaggingResult,
-        ),
+    chunk_parser = PydanticOutputParser(
+        pydantic_object=TaggingResult,
     )
 
     chunk_prompt = ChatPromptTemplate.from_messages(
