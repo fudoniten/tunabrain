@@ -22,7 +22,7 @@
           name = "tunabrain-server";
           runtimeInputs = [ pythonEnv pkgs.python311 ];
           text = ''
-            export PYTHONPATH=${./src}:$PYTHONPATH
+            export PYTHONPATH=${./src}:${PYTHONPATH:-}
             exec python -m tunabrain "$@"
           '';
         };
