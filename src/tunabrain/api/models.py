@@ -15,15 +15,15 @@ class MediaItem(BaseModel):
     genres: List[str] = Field(default_factory=list)
     duration_minutes: Optional[int] = Field(None, description="Runtime in minutes")
     rating: Optional[str] = Field(None, description="Content rating, e.g. TV-14")
+    CriticalRating: Optional[float] = Field(None, description="Critic rating, from 1 to 10")
+    AudienceRating: Optional[float] = Field(None, description="Audience rating, from 1 to 10")
 
 
 class Channel(BaseModel):
     """A Tunarr channel definition."""
 
-    id: str
     name: str
     description: Optional[str] = None
-    tags: List[str] = Field(default_factory=list)
 
 
 class TaggingRequest(BaseModel):
@@ -44,7 +44,7 @@ class ChannelMappingRequest(BaseModel):
 
 
 class ChannelMapping(BaseModel):
-    channel_id: str
+    channel_name: str
     reasons: List[str] = Field(default_factory=list)
 
 
