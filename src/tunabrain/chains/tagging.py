@@ -8,6 +8,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from pydantic import BaseModel, Field
 
 from tunabrain.api.models import MediaItem
+from tunabrain.config import is_debug_enabled
 from tunabrain.llm import get_chat_model
 from tunabrain.tools.wikipedia import WikipediaLookupTool
 
@@ -32,8 +33,10 @@ async def generate_tags(
     concise tags that help place the media into thematic schedules.
     """
 
+    debug_enabled = is_debug_enabled(debug)
+
     llm = get_chat_model()
-    llm_with_tools = llm.bind_tools([WikipediaLookupTool(debug=debug)])
+    llm_with_tools = llm.bind_tools([WikipediaLookupTool(debug=debug_enabled)])
 
     parser = PydanticOutputParser(pydantic_object=TaggingResult)
 
@@ -88,10 +91,10 @@ async def generate_tags(
                 "candidate_tags": ", ".join(batch),
                 "format_instructions": f"\n\n{chunk_parser.get_format_instructions()}",
             }
-            if debug:
+            if debug_enabled:
                 logger.debug("LLM request (tag batch %s): %s", i // batch_size + 1, batch_inputs)
             result: TaggingResult = await chain.ainvoke(batch_inputs)
-            if debug:
+            if debug_enabled:
                 logger.debug(
                     "LLM response (tag batch %s): %s",
                     i // batch_size + 1,
@@ -146,10 +149,10 @@ async def generate_tags(
         "existing_tags": ", ".join(vetted_existing_tags) if vetted_existing_tags else "None",
         "format_instructions": f"\n\n{parser.get_format_instructions()}",
     }
-    if debug:
+    if debug_enabled:
         logger.debug("LLM request (final tags): %s", final_inputs)
     result: TaggingResult = await chain.ainvoke(final_inputs)
-    if debug:
+    if debug_enabled:
         logger.debug("LLM response (final tags): %s", result.model_dump())
 
     return result.tags
