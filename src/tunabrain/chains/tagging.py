@@ -5,7 +5,7 @@ from typing import Iterable, List
 from langchain.chat_models import init_chat_model
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.pydantic_v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 
 from tunabrain.api.models import MediaItem
 from tunabrain.tools.wikipedia import WikipediaLookupTool

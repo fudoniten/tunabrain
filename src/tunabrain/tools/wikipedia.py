@@ -101,12 +101,12 @@ async def _search_wikipedia(query: str) -> Optional[str]:
 class WikipediaLookupTool(BaseTool):
     """Retrieve a scheduling-oriented summary of a media item from Wikipedia."""
 
-    name = "wikipedia_media_lookup"
-    description = (
+    name: str = "wikipedia_media_lookup"
+    description: str = (
         "Look up a media item on Wikipedia using an IMDB ID when available or the title and "
         "release year, returning a concise synopsis for scheduling decisions."
     )
-    args_schema = WikipediaMediaLookupInput
+    args_schema: type[WikipediaMediaLookupInput] = WikipediaMediaLookupInput
 
     def _run(self, name: str, year: Optional[int] = None, imdb_id: Optional[str] = None) -> str:  # type: ignore[override]
         query = _build_search_query(name=name, year=year, imdb_id=imdb_id)
