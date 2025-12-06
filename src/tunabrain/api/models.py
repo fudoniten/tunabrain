@@ -15,8 +15,8 @@ class MediaItem(BaseModel):
     genres: List[str] = Field(default_factory=list)
     duration_minutes: Optional[int] = Field(None, description="Runtime in minutes")
     rating: Optional[str] = Field(None, description="Content rating, e.g. TV-14")
-    CriticalRating: Optional[float] = Field(None, description="Critic rating, from 1 to 10")
-    AudienceRating: Optional[float] = Field(None, description="Audience rating, from 1 to 10")
+    critical_rating: Optional[float] = Field(None, description="Critic rating, from 1 to 10")
+    audience_rating: Optional[float] = Field(None, description="Audience rating, from 1 to 10")
     current_tags: List[str] = Field(
         default_factory=list,
         description="Existing tags already assigned to the media that should be reviewed",
