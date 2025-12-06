@@ -11,6 +11,7 @@ async def build_schedule(
     media: List[MediaItem],
     user_instructions: Optional[str],
     scheduling_window_days: int,
+    debug: bool = False,
 ) -> ScheduleResponse:
     """Create a schedule for the provided channel and media list.
 

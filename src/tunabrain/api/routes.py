@@ -27,13 +27,15 @@ async def health() -> dict[str, str]:
 
 @router.post("/tags", response_model=TaggingResponse)
 async def tag_media(request: TaggingRequest) -> TaggingResponse:
-    tags = await generate_tags(request.media, request.existing_tags)
+    tags = await generate_tags(request.media, request.existing_tags, debug=request.debug)
     return TaggingResponse(tags=tags)
 
 
 @router.post("/channel-mapping", response_model=ChannelMappingResponse)
 async def channel_mapping(request: ChannelMappingRequest) -> ChannelMappingResponse:
-    mappings = await map_media_to_channels(request.media, request.channels)
+    mappings = await map_media_to_channels(
+        request.media, request.channels, debug=request.debug
+    )
     return ChannelMappingResponse(mappings=mappings)
 
 
@@ -44,6 +46,7 @@ async def schedule(request: ScheduleRequest) -> ScheduleResponse:
         media=request.media,
         user_instructions=request.user_instructions,
         scheduling_window_days=request.scheduling_window_days,
+        debug=request.debug,
     )
 
 
@@ -54,6 +57,7 @@ async def bumpers(request: BumperRequest) -> BumperResponse:
         schedule_overview=request.schedule_overview,
         duration_seconds=request.duration_seconds,
         focus_window=request.focus_window,
+        debug=request.debug,
     )
     return BumperResponse(bumpers=bumpers)
 
