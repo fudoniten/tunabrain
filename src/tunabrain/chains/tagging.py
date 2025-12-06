@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Iterable, List
 
-from langchain.chat_models import init_chat_model
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from pydantic import BaseModel, Field
 
 from tunabrain.api.models import MediaItem
+from tunabrain.llm import get_chat_model
 from tunabrain.tools.wikipedia import WikipediaLookupTool
 
 
@@ -26,7 +26,7 @@ async def generate_tags(media: MediaItem, existing_tags: list[str] | None = None
     concise tags that help place the media into thematic schedules.
     """
 
-    llm = init_chat_model(model="gpt-4o-mini", model_provider="openai")
+    llm = get_chat_model()
     llm_with_tools = llm.bind_tools([WikipediaLookupTool()])
 
     parser = PydanticOutputParser(pydantic_object=TaggingResult)
