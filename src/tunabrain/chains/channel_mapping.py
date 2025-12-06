@@ -5,7 +5,9 @@ from typing import List
 from tunabrain.api.models import Channel, ChannelMapping, MediaItem
 
 
-async def map_media_to_channels(media: MediaItem, channels: List[Channel]) -> List[ChannelMapping]:
+async def map_media_to_channels(
+    media: MediaItem, channels: List[Channel], *, debug: bool = False
+) -> List[ChannelMapping]:
     """Map a media item to the best-fit channels.
 
     The implementation should evaluate channel themes, user guidance, and

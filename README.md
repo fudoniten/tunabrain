@@ -40,6 +40,9 @@ TunaBrain reads environment variables to decide which chat model to use:
 
 - `TUNABRAIN_LLM_PROVIDER`: LangChain provider name (default: `openai`).
 - `TUNABRAIN_LLM_MODEL`: Model identifier to load (default: `gpt-4o-mini`).
+- `TUNABRAIN_DEBUG`: Set to `1`, `true`, or `yes` to force debug logging for LLM
+  prompts and downstream HTTP requests, even before a request payload can be
+  parsed.
 
 When using OpenAI, provide an API key via `OPENAI_API_KEY` (or rely on your shell's
 existing `OPENAI_API_KEY` export). For example:

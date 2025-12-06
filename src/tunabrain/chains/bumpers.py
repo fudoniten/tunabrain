@@ -11,6 +11,7 @@ async def generate_bumpers(
     schedule_overview: str,
     duration_seconds: int,
     focus_window: Optional[str],
+    debug: bool = False,
 ) -> List[Bumper]:
     """Generate bumpers to pair with a given schedule.
 

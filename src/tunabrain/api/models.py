@@ -38,6 +38,10 @@ class TaggingRequest(BaseModel):
         default_factory=list,
         description="Preferred tags to reuse when generating a final tag set",
     )
+    debug: bool = Field(
+        False,
+        description="Enable debug logging for outgoing LLM and downstream service calls",
+    )
 
 
 class TaggingResponse(BaseModel):
@@ -49,6 +53,10 @@ class ChannelMappingRequest(BaseModel):
 
     media: MediaItem
     channels: List[Channel]
+    debug: bool = Field(
+        False,
+        description="Enable debug logging for outgoing LLM and downstream service calls",
+    )
 
 
 class ChannelMapping(BaseModel):
@@ -78,6 +86,10 @@ class ScheduleRequest(BaseModel):
     scheduling_window_days: int = Field(
         30, description="How many days the resulting schedule should cover"
     )
+    debug: bool = Field(
+        False,
+        description="Enable debug logging for outgoing LLM and downstream service calls",
+    )
 
 
 class ScheduleResponse(BaseModel):
@@ -94,6 +106,10 @@ class BumperRequest(BaseModel):
     duration_seconds: int
     focus_window: Optional[str] = Field(
         None, description="Temporal focus for the bumper, e.g. 'coming up this week'"
+    )
+    debug: bool = Field(
+        False,
+        description="Enable debug logging for outgoing LLM and downstream service calls",
     )
 
 

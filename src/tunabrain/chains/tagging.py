@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Iterable, List
 
 from langchain.output_parsers import OutputFixingParser
@@ -8,8 +9,12 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from pydantic import BaseModel, Field
 
 from tunabrain.api.models import MediaItem
+from tunabrain.config import is_debug_enabled
 from tunabrain.llm import get_chat_model
 from tunabrain.tools.wikipedia import WikipediaLookupTool
+
+
+logger = logging.getLogger(__name__)
 
 
 class TaggingResult(BaseModel):
@@ -20,15 +25,19 @@ class TaggingResult(BaseModel):
     )
 
 
-async def generate_tags(media: MediaItem, existing_tags: list[str] | None = None) -> list[str]:
+async def generate_tags(
+    media: MediaItem, existing_tags: list[str] | None = None, *, debug: bool = False
+) -> list[str]:
     """Generate scheduling-friendly tags for the provided media item.
 
     This function should orchestrate LangChain components to build a set of
     concise tags that help place the media into thematic schedules.
     """
 
+    debug_enabled = is_debug_enabled(debug)
+
     llm = get_chat_model()
-    llm_with_tools = llm.bind_tools([WikipediaLookupTool()])
+    llm_with_tools = llm.bind_tools([WikipediaLookupTool(debug=debug_enabled)])
 
     parser = OutputFixingParser.from_llm(
         llm,
@@ -77,20 +86,27 @@ async def generate_tags(media: MediaItem, existing_tags: list[str] | None = None
         for i in range(0, len(tag_list), batch_size):
             batch = tag_list[i : i + batch_size]
             chain = chunk_prompt | llm_with_tools | chunk_parser
-            result: TaggingResult = await chain.ainvoke(
-                {
-                    "title": media.title,
-                    "description": media.description or "Not provided",
-                    "genres": ", ".join(media.genres) if media.genres else "Unknown",
-                    "duration": media.duration_minutes or "Unknown",
-                    "rating": media.rating or "Unknown",
-                    "current_tags": ", ".join(media.current_tags)
-                    if media.current_tags
-                    else "None",
-                    "candidate_tags": ", ".join(batch),
-                    "format_instructions": f"\n\n{chunk_parser.get_format_instructions()}",
-                }
-            )
+            batch_inputs = {
+                "title": media.title,
+                "description": media.description or "Not provided",
+                "genres": ", ".join(media.genres) if media.genres else "Unknown",
+                "duration": media.duration_minutes or "Unknown",
+                "rating": media.rating or "Unknown",
+                "current_tags": ", ".join(media.current_tags)
+                if media.current_tags
+                else "None",
+                "candidate_tags": ", ".join(batch),
+                "format_instructions": f"\n\n{chunk_parser.get_format_instructions()}",
+            }
+            if debug_enabled:
+                logger.debug("LLM request (tag batch %s): %s", i // batch_size + 1, batch_inputs)
+            result: TaggingResult = await chain.ainvoke(batch_inputs)
+            if debug_enabled:
+                logger.debug(
+                    "LLM response (tag batch %s): %s",
+                    i // batch_size + 1,
+                    result.model_dump(),
+                )
             for tag in result.tags:
                 if tag not in selected:
                     selected.append(tag)
@@ -128,20 +144,23 @@ async def generate_tags(media: MediaItem, existing_tags: list[str] | None = None
 
     chain = prompt | llm_with_tools | parser
 
-    result: TaggingResult = await chain.ainvoke(
-        {
-            "title": media.title,
-            "description": media.description or "Not provided",
-            "genres": ", ".join(media.genres) if media.genres else "Unknown",
-            "duration": media.duration_minutes or "Unknown",
-            "rating": media.rating or "Unknown",
-            "current_tags": ", ".join(media.current_tags)
-            if media.current_tags
-            else "None",
-            "existing_tags": ", ".join(vetted_existing_tags) if vetted_existing_tags else "None",
-            "format_instructions": f"\n\n{parser.get_format_instructions()}",
-        }
-    )
+    final_inputs = {
+        "title": media.title,
+        "description": media.description or "Not provided",
+        "genres": ", ".join(media.genres) if media.genres else "Unknown",
+        "duration": media.duration_minutes or "Unknown",
+        "rating": media.rating or "Unknown",
+        "current_tags": ", ".join(media.current_tags)
+        if media.current_tags
+        else "None",
+        "existing_tags": ", ".join(vetted_existing_tags) if vetted_existing_tags else "None",
+        "format_instructions": f"\n\n{parser.get_format_instructions()}",
+    }
+    if debug_enabled:
+        logger.debug("LLM request (final tags): %s", final_inputs)
+    result: TaggingResult = await chain.ainvoke(final_inputs)
+    if debug_enabled:
+        logger.debug("LLM response (final tags): %s", result.model_dump())
 
     return result.tags
 
