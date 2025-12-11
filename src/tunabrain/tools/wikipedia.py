@@ -11,8 +11,10 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 
-WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
-WIKIPEDIA_SUMMARY_API = "https://en.wikipedia.org/api/rest_v1/page/summary/"
+WIKIPEDIA_API = "https://api.wikimedia.org/core/v1/wikipedia/en/search/page"
+WIKIPEDIA_SUMMARY_API = "https://api.wikimedia.org/core/v1/wikipedia/en/page/summary/"
+WIKIPEDIA_USER_AGENT = "TunaBrain/0.1 (+https://github.com/tunarr-labs/tunabrain)"
+REQUEST_HEADERS = {"User-Agent": WIKIPEDIA_USER_AGENT}
 
 
 class WikipediaMediaLookupInput(BaseModel):
@@ -39,7 +41,7 @@ def _fetch_summary_sync(title: str, *, debug: bool = False) -> str:
     url = f"{WIKIPEDIA_SUMMARY_API}{quote(title)}"
     if debug:
         logger.debug("Wikipedia summary request (sync): %s", url)
-    with httpx.Client() as client:
+    with httpx.Client(headers=REQUEST_HEADERS) as client:
         summary_resp = client.get(url)
         summary_resp.raise_for_status()
         data = summary_resp.json()
@@ -63,7 +65,7 @@ async def _fetch_summary(title: str, *, debug: bool = False) -> str:
     url = f"{WIKIPEDIA_SUMMARY_API}{quote(title)}"
     if debug:
         logger.debug("Wikipedia summary request (async): %s", url)
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(headers=REQUEST_HEADERS) as client:
         summary_resp = await client.get(url)
         summary_resp.raise_for_status()
         data = summary_resp.json()
@@ -84,16 +86,10 @@ async def _fetch_summary(title: str, *, debug: bool = False) -> str:
 
 
 def _search_wikipedia_sync(query: str, *, debug: bool = False) -> str | None:
-    params = {
-        "action": "query",
-        "format": "json",
-        "list": "search",
-        "srsearch": query,
-        "srlimit": 1,
-    }
+    params = {"q": query, "limit": 1}
     if debug:
         logger.debug("Wikipedia search request (sync): %s params=%s", WIKIPEDIA_API, params)
-    with httpx.Client() as client:
+    with httpx.Client(headers=REQUEST_HEADERS) as client:
         resp = client.get(WIKIPEDIA_API, params=params)
         resp.raise_for_status()
         data = resp.json()
@@ -101,23 +97,18 @@ def _search_wikipedia_sync(query: str, *, debug: bool = False) -> str | None:
         logger.debug(
             "Wikipedia search response (sync) [%s]: %s", resp.status_code, data
         )
-    search_results = data.get("query", {}).get("search", [])
+    search_results = data.get("pages", [])
     if not search_results:
         return None
-    return search_results[0].get("title")
+    top_result = search_results[0]
+    return top_result.get("key") or top_result.get("title")
 
 
 async def _search_wikipedia(query: str, *, debug: bool = False) -> str | None:
-    params = {
-        "action": "query",
-        "format": "json",
-        "list": "search",
-        "srsearch": query,
-        "srlimit": 1,
-    }
+    params = {"q": query, "limit": 1}
     if debug:
         logger.debug("Wikipedia search request (async): %s params=%s", WIKIPEDIA_API, params)
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(headers=REQUEST_HEADERS) as client:
         resp = await client.get(WIKIPEDIA_API, params=params)
         resp.raise_for_status()
         data = resp.json()
@@ -125,10 +116,11 @@ async def _search_wikipedia(query: str, *, debug: bool = False) -> str | None:
         logger.debug(
             "Wikipedia search response (async) [%s]: %s", resp.status_code, data
         )
-    search_results = data.get("query", {}).get("search", [])
+    search_results = data.get("pages", [])
     if not search_results:
         return None
-    return search_results[0].get("title")
+    top_result = search_results[0]
+    return top_result.get("key") or top_result.get("title")
 
 
 class WikipediaLookupTool(BaseTool):
