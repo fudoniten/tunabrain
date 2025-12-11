@@ -10,6 +10,9 @@ class MediaItem(BaseModel):
 
     id: str = Field(..., description="Unique identifier for the media item")
     title: str
+    imdb_id: str | None = Field(
+        None, description="IMDB identifier for the media item, e.g. tt0149460"
+    )
     description: str | None = None
     genres: list[str] = Field(default_factory=list)
     duration_minutes: int | None = Field(None, description="Runtime in minutes")

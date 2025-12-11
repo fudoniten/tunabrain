@@ -1,5 +1,5 @@
-"""LangChain-compatible tools for TunaBrain."""
+"""Utility helpers for TunaBrain."""
 
-from tunabrain.tools.wikipedia import WikipediaLookupTool, WikipediaMediaLookupInput
+from tunabrain.tools.wikipedia import WikipediaLookup
 
-__all__ = ["WikipediaLookupTool", "WikipediaMediaLookupInput"]
+__all__ = ["WikipediaLookup"]

@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Iterable
 
 from langchain_core.exceptions import OutputParserException
-from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from pydantic import BaseModel, Field
@@ -13,7 +11,7 @@ from pydantic import BaseModel, Field
 from tunabrain.api.models import MediaItem
 from tunabrain.config import is_debug_enabled
 from tunabrain.llm import get_chat_model
-from tunabrain.tools.wikipedia import WikipediaLookupTool
+from tunabrain.tools.wikipedia import WikipediaLookup
 
 
 logger = logging.getLogger(__name__)
@@ -39,9 +37,18 @@ async def generate_tags(
     debug_enabled = is_debug_enabled(debug)
 
     llm = get_chat_model()
-    wikipedia_tool = WikipediaLookupTool(debug=debug_enabled)
-    tools_by_name = {wikipedia_tool.name: wikipedia_tool}
-    llm_with_tools = llm.bind_tools(list(tools_by_name.values()))
+    wikipedia = WikipediaLookup(debug=debug_enabled)
+    wikipedia_summary: str | None = None
+    try:
+        wikipedia_summary = await wikipedia.lookup_async(
+            name=media.title,
+            year=None,
+            imdb_id=getattr(media, "imdb_id", None),
+        )
+    except Exception as exc:  # pragma: no cover - defensive catch for external service
+        logger.warning("Wikipedia lookup failed: %s", exc)
+
+    wikipedia_context = wikipedia_summary or "Wikipedia summary not available."
 
     parser = PydanticOutputParser(pydantic_object=TaggingResult)
 
@@ -51,54 +58,10 @@ async def generate_tags(
 
     async def invoke_prompt(prompt: ChatPromptTemplate, inputs: dict, parser: PydanticOutputParser):
         messages = prompt.format_messages(**inputs)
-        tool_rounds = 0
-        tool_cache: dict[tuple[str, str], str] = {}
-
-        while True:
-            response = await llm_with_tools.ainvoke(messages)
-            if debug_enabled:
-                logger.debug("LLM raw response: %s", response)
-
-            if isinstance(response, AIMessage) and response.tool_calls:
-                tool_messages: list[ToolMessage] = []
-                for tool_call in response.tool_calls:
-                    tool = tools_by_name.get(tool_call["name"])
-                    if not tool:
-                        raise ValueError(f"Unknown tool requested: {tool_call['name']}")
-
-                    cache_key = (tool_call["name"], json.dumps(tool_call["args"], sort_keys=True))
-                    cached_result = tool_cache.get(cache_key)
-                    if debug_enabled:
-                        logger.debug(
-                            "Handling tool call %s with args %s",
-                            tool_call["name"],
-                            tool_call["args"],
-                        )
-
-                    if cached_result is not None:
-                        tool_result = cached_result
-                        if debug_enabled:
-                            logger.debug(
-                                "Using cached result for %s with args %s", *cache_key
-                            )
-                    else:
-                        tool_result = await tool.ainvoke(tool_call["args"])
-                        tool_cache[cache_key] = tool_result
-                    tool_messages.append(
-                        ToolMessage(
-                            content=str(tool_result),
-                            tool_call_id=tool_call["id"],
-                        )
-                    )
-                messages.extend([response, *tool_messages])
-
-                tool_rounds += 1
-                if tool_rounds > 3:
-                    raise RuntimeError("Exceeded maximum tool call rounds for tagging prompt")
-
-                continue
-
-            return await parser.ainvoke(response)
+        response = await llm.ainvoke(messages)
+        if debug_enabled:
+            logger.debug("LLM raw response: %s", response)
+        return await parser.ainvoke(response)
 
     chunk_prompt = ChatPromptTemplate.from_messages(
         [
@@ -117,8 +80,9 @@ async def generate_tags(
                 "- Runtime (minutes): {duration}\n"
                 "- Rating: {rating}\n"
                 "- Current tags: {current_tags}\n\n"
+                "Wikipedia summary: {wikipedia_summary}\n\n"
                 "Candidate tags (batch): {candidate_tags}\n\n"
-                "If the synopsis is unclear, call the wikipedia_media_lookup tool."
+                "Use the Wikipedia synopsis as needed to validate tags."
                 " Return only the JSON dictated by the format instructions."
                 "{format_instructions}",
             ),
@@ -141,6 +105,7 @@ async def generate_tags(
                 "duration": media.duration_minutes or "Unknown",
                 "rating": media.rating or "Unknown",
                 "current_tags": ", ".join(media.current_tags) if media.current_tags else "None",
+                "wikipedia_summary": wikipedia_context,
                 "candidate_tags": ", ".join(batch),
                 "format_instructions": f"\n\n{chunk_parser.get_format_instructions()}",
             }
@@ -191,7 +156,8 @@ async def generate_tags(
                 "- Rating: {rating}\n"
                 "- Current tags (review for removal): {current_tags}\n"
                 "- Vetted existing tags to reuse: {existing_tags}\n\n"
-                "If the synopsis is unclear, call the wikipedia_media_lookup tool."
+                "Wikipedia summary: {wikipedia_summary}\n\n"
+                "Use the Wikipedia synopsis to ensure accuracy."
                 " Return only the JSON dictated by the format instructions."
                 "{format_instructions}",
             ),
@@ -206,6 +172,7 @@ async def generate_tags(
         "rating": media.rating or "Unknown",
         "current_tags": ", ".join(media.current_tags) if media.current_tags else "None",
         "existing_tags": ", ".join(vetted_existing_tags) if vetted_existing_tags else "None",
+        "wikipedia_summary": wikipedia_context,
         "format_instructions": f"\n\n{parser.get_format_instructions()}",
     }
     if debug_enabled:
