@@ -4,8 +4,6 @@ import logging
 from urllib.parse import quote
 
 import httpx
-from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field
 
 
 logger = logging.getLogger(__name__)
@@ -15,18 +13,6 @@ WIKIPEDIA_API = "https://api.wikimedia.org/core/v1/wikipedia/en/search/page"
 WIKIPEDIA_SUMMARY_API = "https://api.wikimedia.org/core/v1/wikipedia/en/page/summary/"
 WIKIPEDIA_USER_AGENT = "TunaBrain/0.1 (+https://github.com/tunarr-labs/tunabrain)"
 REQUEST_HEADERS = {"User-Agent": WIKIPEDIA_USER_AGENT}
-
-
-class WikipediaMediaLookupInput(BaseModel):
-    """Input schema for looking up a media item on Wikipedia."""
-
-    name: str = Field(..., description="Primary title of the media item")
-    year: int | None = Field(
-        None, description="Release year used to disambiguate titles when IMDB ID is absent"
-    )
-    imdb_id: str | None = Field(
-        None, description="IMDB identifier for the media item, e.g. tt0149460"
-    )
 
 
 def _build_search_query(name: str, year: int | None, imdb_id: str | None) -> str:
@@ -123,29 +109,58 @@ async def _search_wikipedia(query: str, *, debug: bool = False) -> str | None:
     return top_result.get("key") or top_result.get("title")
 
 
-class WikipediaLookupTool(BaseTool):
-    """Retrieve a scheduling-oriented summary of a media item from Wikipedia."""
+class WikipediaLookup:
+    """Retrieve and cache Wikipedia summaries for media items.
 
-    name: str = "wikipedia_media_lookup"
-    description: str = (
-        "Look up a media item on Wikipedia using an IMDB ID when available or the title and "
-        "release year, returning a concise synopsis for scheduling decisions."
-    )
-    args_schema: type[WikipediaMediaLookupInput] = WikipediaMediaLookupInput
-    debug: bool = False
+    This class always prefers IMDB IDs for disambiguation, falling back to the
+    provided title (and optional year). Results are cached per query so
+    repeated calls do not trigger new HTTP requests.
+    """
 
-    def _run(self, name: str, year: int | None = None, imdb_id: str | None = None) -> str:  # type: ignore[override]
+    _cache: dict[str, str] = {}
+
+    def __init__(self, *, debug: bool = False) -> None:
+        self.debug = debug
+
+    def _cache_key(self, name: str, year: int | None, imdb_id: str | None) -> str:
+        if imdb_id:
+            return imdb_id.lower()
+        if year:
+            return f"{name.lower()} ({year})"
+        return name.lower()
+
+    def lookup(self, *, name: str, year: int | None = None, imdb_id: str | None = None) -> str:
+        """Synchronously fetch a Wikipedia summary, using cached results when available."""
+
+        cache_key = self._cache_key(name, year, imdb_id)
+        if cache_key in self._cache:
+            if self.debug:
+                logger.debug("Wikipedia cache hit for %s", cache_key)
+            return self._cache[cache_key]
+
         query = _build_search_query(name=name, year=year, imdb_id=imdb_id)
         title = _search_wikipedia_sync(query, debug=self.debug)
         if not title:
             raise ValueError(f"No Wikipedia entry found for query: {query}")
-        return _fetch_summary_sync(title, debug=self.debug)
+        summary = _fetch_summary_sync(title, debug=self.debug)
+        self._cache[cache_key] = summary
+        return summary
 
-    async def _arun(
-        self, name: str, year: int | None = None, imdb_id: str | None = None
-    ) -> str:  # type: ignore[override]
+    async def lookup_async(
+        self, *, name: str, year: int | None = None, imdb_id: str | None = None
+    ) -> str:
+        """Asynchronously fetch a Wikipedia summary, using cached results when available."""
+
+        cache_key = self._cache_key(name, year, imdb_id)
+        if cache_key in self._cache:
+            if self.debug:
+                logger.debug("Wikipedia cache hit for %s", cache_key)
+            return self._cache[cache_key]
+
         query = _build_search_query(name=name, year=year, imdb_id=imdb_id)
         title = await _search_wikipedia(query, debug=self.debug)
         if not title:
             raise ValueError(f"No Wikipedia entry found for query: {query}")
-        return await _fetch_summary(title, debug=self.debug)
+        summary = await _fetch_summary(title, debug=self.debug)
+        self._cache[cache_key] = summary
+        return summary
