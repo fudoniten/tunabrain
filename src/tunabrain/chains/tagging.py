@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 
+from langchain_core.exceptions import OutputParserException
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from pydantic import BaseModel, Field
@@ -93,7 +94,15 @@ async def generate_tags(
             }
             if debug_enabled:
                 logger.debug("LLM request (tag batch %s): %s", i // batch_size + 1, batch_inputs)
-            result: TaggingResult = await chain.ainvoke(batch_inputs)
+            try:
+                result: TaggingResult = await chain.ainvoke(batch_inputs)
+            except OutputParserException as exc:
+                logger.error(
+                    "Failed to parse tagging batch %s. llm_output=%s",
+                    i // batch_size + 1,
+                    getattr(exc, "llm_output", "<missing>"),
+                )
+                raise
             if debug_enabled:
                 logger.debug(
                     "LLM response (tag batch %s): %s",
@@ -151,7 +160,14 @@ async def generate_tags(
     }
     if debug_enabled:
         logger.debug("LLM request (final tags): %s", final_inputs)
-    result: TaggingResult = await chain.ainvoke(final_inputs)
+    try:
+        result: TaggingResult = await chain.ainvoke(final_inputs)
+    except OutputParserException as exc:
+        logger.error(
+            "Failed to parse final tagging response. llm_output=%s",
+            getattr(exc, "llm_output", "<missing>"),
+        )
+        raise
     if debug_enabled:
         logger.debug("LLM response (final tags): %s", result.model_dump())
 
