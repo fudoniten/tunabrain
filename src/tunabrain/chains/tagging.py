@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Iterable
 
 from langchain_core.exceptions import OutputParserException
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from pydantic import BaseModel, Field
@@ -37,13 +39,66 @@ async def generate_tags(
     debug_enabled = is_debug_enabled(debug)
 
     llm = get_chat_model()
-    llm_with_tools = llm.bind_tools([WikipediaLookupTool(debug=debug_enabled)])
+    wikipedia_tool = WikipediaLookupTool(debug=debug_enabled)
+    tools_by_name = {wikipedia_tool.name: wikipedia_tool}
+    llm_with_tools = llm.bind_tools(list(tools_by_name.values()))
 
     parser = PydanticOutputParser(pydantic_object=TaggingResult)
 
     chunk_parser = PydanticOutputParser(
         pydantic_object=TaggingResult,
     )
+
+    async def invoke_prompt(prompt: ChatPromptTemplate, inputs: dict, parser: PydanticOutputParser):
+        messages = prompt.format_messages(**inputs)
+        tool_rounds = 0
+        tool_cache: dict[tuple[str, str], str] = {}
+
+        while True:
+            response = await llm_with_tools.ainvoke(messages)
+            if debug_enabled:
+                logger.debug("LLM raw response: %s", response)
+
+            if isinstance(response, AIMessage) and response.tool_calls:
+                tool_messages: list[ToolMessage] = []
+                for tool_call in response.tool_calls:
+                    tool = tools_by_name.get(tool_call["name"])
+                    if not tool:
+                        raise ValueError(f"Unknown tool requested: {tool_call['name']}")
+
+                    cache_key = (tool_call["name"], json.dumps(tool_call["args"], sort_keys=True))
+                    cached_result = tool_cache.get(cache_key)
+                    if debug_enabled:
+                        logger.debug(
+                            "Handling tool call %s with args %s",
+                            tool_call["name"],
+                            tool_call["args"],
+                        )
+
+                    if cached_result is not None:
+                        tool_result = cached_result
+                        if debug_enabled:
+                            logger.debug(
+                                "Using cached result for %s with args %s", *cache_key
+                            )
+                    else:
+                        tool_result = await tool.ainvoke(tool_call["args"])
+                        tool_cache[cache_key] = tool_result
+                    tool_messages.append(
+                        ToolMessage(
+                            content=str(tool_result),
+                            tool_call_id=tool_call["id"],
+                        )
+                    )
+                messages.extend([response, *tool_messages])
+
+                tool_rounds += 1
+                if tool_rounds > 3:
+                    raise RuntimeError("Exceeded maximum tool call rounds for tagging prompt")
+
+                continue
+
+            return await parser.ainvoke(response)
 
     chunk_prompt = ChatPromptTemplate.from_messages(
         [
@@ -79,23 +134,22 @@ async def generate_tags(
         batch_size = 75
         for i in range(0, len(tag_list), batch_size):
             batch = tag_list[i : i + batch_size]
-            chain = chunk_prompt | llm_with_tools | chunk_parser
             batch_inputs = {
                 "title": media.title,
                 "description": media.description or "Not provided",
                 "genres": ", ".join(media.genres) if media.genres else "Unknown",
                 "duration": media.duration_minutes or "Unknown",
                 "rating": media.rating or "Unknown",
-                "current_tags": ", ".join(media.current_tags)
-                if media.current_tags
-                else "None",
+                "current_tags": ", ".join(media.current_tags) if media.current_tags else "None",
                 "candidate_tags": ", ".join(batch),
                 "format_instructions": f"\n\n{chunk_parser.get_format_instructions()}",
             }
             if debug_enabled:
                 logger.debug("LLM request (tag batch %s): %s", i // batch_size + 1, batch_inputs)
             try:
-                result: TaggingResult = await chain.ainvoke(batch_inputs)
+                result: TaggingResult = await invoke_prompt(
+                    chunk_prompt, batch_inputs, chunk_parser
+                )
             except OutputParserException as exc:
                 logger.error(
                     "Failed to parse tagging batch %s. llm_output=%s",
@@ -144,24 +198,20 @@ async def generate_tags(
         ]
     )
 
-    chain = prompt | llm_with_tools | parser
-
     final_inputs = {
         "title": media.title,
         "description": media.description or "Not provided",
         "genres": ", ".join(media.genres) if media.genres else "Unknown",
         "duration": media.duration_minutes or "Unknown",
         "rating": media.rating or "Unknown",
-        "current_tags": ", ".join(media.current_tags)
-        if media.current_tags
-        else "None",
+        "current_tags": ", ".join(media.current_tags) if media.current_tags else "None",
         "existing_tags": ", ".join(vetted_existing_tags) if vetted_existing_tags else "None",
         "format_instructions": f"\n\n{parser.get_format_instructions()}",
     }
     if debug_enabled:
         logger.debug("LLM request (final tags): %s", final_inputs)
     try:
-        result: TaggingResult = await chain.ainvoke(final_inputs)
+        result: TaggingResult = await invoke_prompt(prompt, final_inputs, parser)
     except OutputParserException as exc:
         logger.error(
             "Failed to parse final tagging response. llm_output=%s",
@@ -172,4 +222,3 @@ async def generate_tags(
         logger.debug("LLM response (final tags): %s", result.model_dump())
 
     return result.tags
-
