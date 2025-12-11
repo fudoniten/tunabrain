@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-from typing import List, Optional
-
 from tunabrain.api.models import Channel, MediaItem, ScheduleResponse
 
 
 async def build_schedule(
     *,
     channel: Channel,
-    media: List[MediaItem],
-    user_instructions: Optional[str],
+    media: list[MediaItem],
+    user_instructions: str | None,
     scheduling_window_days: int,
     debug: bool = False,
 ) -> ScheduleResponse:

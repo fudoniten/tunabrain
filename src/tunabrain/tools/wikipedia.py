@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 from urllib.parse import quote
 
 import httpx
@@ -20,15 +19,15 @@ class WikipediaMediaLookupInput(BaseModel):
     """Input schema for looking up a media item on Wikipedia."""
 
     name: str = Field(..., description="Primary title of the media item")
-    year: Optional[int] = Field(
+    year: int | None = Field(
         None, description="Release year used to disambiguate titles when IMDB ID is absent"
     )
-    imdb_id: Optional[str] = Field(
+    imdb_id: str | None = Field(
         None, description="IMDB identifier for the media item, e.g. tt0149460"
     )
 
 
-def _build_search_query(name: str, year: Optional[int], imdb_id: Optional[str]) -> str:
+def _build_search_query(name: str, year: int | None, imdb_id: str | None) -> str:
     if imdb_id:
         return imdb_id
     if year:
@@ -84,7 +83,7 @@ async def _fetch_summary(title: str, *, debug: bool = False) -> str:
     return "\n".join(lines)
 
 
-def _search_wikipedia_sync(query: str, *, debug: bool = False) -> Optional[str]:
+def _search_wikipedia_sync(query: str, *, debug: bool = False) -> str | None:
     params = {
         "action": "query",
         "format": "json",
@@ -108,7 +107,7 @@ def _search_wikipedia_sync(query: str, *, debug: bool = False) -> Optional[str]:
     return search_results[0].get("title")
 
 
-async def _search_wikipedia(query: str, *, debug: bool = False) -> Optional[str]:
+async def _search_wikipedia(query: str, *, debug: bool = False) -> str | None:
     params = {
         "action": "query",
         "format": "json",
@@ -143,7 +142,7 @@ class WikipediaLookupTool(BaseTool):
     args_schema: type[WikipediaMediaLookupInput] = WikipediaMediaLookupInput
     debug: bool = False
 
-    def _run(self, name: str, year: Optional[int] = None, imdb_id: Optional[str] = None) -> str:  # type: ignore[override]
+    def _run(self, name: str, year: int | None = None, imdb_id: str | None = None) -> str:  # type: ignore[override]
         query = _build_search_query(name=name, year=year, imdb_id=imdb_id)
         title = _search_wikipedia_sync(query, debug=self.debug)
         if not title:
@@ -151,7 +150,7 @@ class WikipediaLookupTool(BaseTool):
         return _fetch_summary_sync(title, debug=self.debug)
 
     async def _arun(
-        self, name: str, year: Optional[int] = None, imdb_id: Optional[str] = None
+        self, name: str, year: int | None = None, imdb_id: str | None = None
     ) -> str:  # type: ignore[override]
         query = _build_search_query(name=name, year=year, imdb_id=imdb_id)
         title = await _search_wikipedia(query, debug=self.debug)
