@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Iterable, List
+from collections.abc import Iterable
 
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 class TaggingResult(BaseModel):
     """Structured response capturing the final tag set."""
 
-    tags: List[str] = Field(
+    tags: list[str] = Field(
         description="Scheduling-friendly tags after reviewing current and existing taxonomy"
     )
 
