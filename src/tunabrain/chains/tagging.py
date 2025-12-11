@@ -37,13 +37,14 @@ async def generate_tags(
     debug_enabled = is_debug_enabled(debug)
 
     llm = get_chat_model()
-    wikipedia = WikipediaLookup(debug=debug_enabled)
+    wikipedia = WikipediaLookup(debug=debug_enabled, llm=llm)
     wikipedia_summary: str | None = None
     try:
         wikipedia_summary = await wikipedia.lookup_async(
             name=media.title,
             year=None,
             imdb_id=getattr(media, "imdb_id", None),
+            llm=llm,
         )
     except Exception as exc:  # pragma: no cover - defensive catch for external service
         logger.warning("Wikipedia lookup failed: %s", exc)
