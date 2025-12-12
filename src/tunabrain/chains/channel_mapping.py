@@ -64,11 +64,7 @@ def _channel_keywords(channel: Channel) -> set[str]:
 async def map_media_to_channels(
     media: MediaItem, channels: list[Channel], *, debug: bool = False
 ) -> list[ChannelMapping]:
-    """Map a media item to the best-fit channels using keyword overlap.
-
-    The heuristic is intentionally deterministic so the endpoint behaves
-    predictably in tests and when running without an LLM. Each piece of media is
-    mapped to at least one channel and no more than three.
+    """Map a media item to the best-fit channels based on media synopsis & channel description.
     """
 
     if not channels:
