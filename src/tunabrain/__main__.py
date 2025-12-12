@@ -13,7 +13,7 @@ def main() -> None:
         "--port",
         type=int,
         default=8000,
-        help="Port to listen on (default: 8000)",
+        help="Port to listen on (default: 5546)",
     )
     args = parser.parse_args()
 
