@@ -9,7 +9,7 @@ class MediaItem(BaseModel):
     """A piece of media in the Tunarr library."""
 
     id: str = Field(..., description="Unique identifier for the media item")
-    title: str
+    title: str = Field(..., description="Title of the media")
     imdb_id: str | None = Field(
         None, description="IMDB identifier for the media item, e.g. tt0149460"
     )

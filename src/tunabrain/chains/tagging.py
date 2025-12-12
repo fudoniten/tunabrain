@@ -141,25 +141,25 @@ async def generate_tags(
         [
             (
                 "system",
-                "You are a scheduling assistant that assigns concise, reusable tags to media. "
-                "Prefer tags from the vetted existing list to avoid synonyms. "
-                "Keep 5-15 tags that describe genre, tone, audience, and programming value. "
+                "You are a scheduling assistant that assigns concise, reusable tags to media. " +
+                "Prefer tags from the vetted existing list to avoid synonyms. " +
+                "Keep 5-15 tags that describe genre, tone, audience, and programming value. " +
                 "Remove tags that are irrelevant to scheduling or inaccurate.",
             ),
             MessagesPlaceholder(variable_name="chat_history", optional=True),
             (
                 "human",
-                "Media metadata for tagging:\n"
-                "- Title: {title}\n"
-                "- Description: {description}\n"
-                "- Genres: {genres}\n"
-                "- Runtime (minutes): {duration}\n"
-                "- Rating: {rating}\n"
-                "- Current tags (review for removal): {current_tags}\n"
-                "- Vetted existing tags to reuse: {existing_tags}\n\n"
-                "Wikipedia summary: {wikipedia_summary}\n\n"
-                "Use the Wikipedia synopsis to ensure accuracy."
-                " Return only the JSON dictated by the format instructions."
+                "Media metadata for tagging:\n" +
+                "- Title: {title}\n" +
+                "- Description: {description}\n" +
+                "- Genres: {genres}\n" +
+                "- Runtime (minutes): {duration}\n" +
+                "- Rating: {rating}\n" +
+                "- Current tags (review for removal): {current_tags}\n" +
+                "- Vetted existing tags to reuse: {existing_tags}\n\n" +
+                "Wikipedia summary: {wikipedia_summary}\n\n" +
+                "Use the Wikipedia synopsis to ensure accuracy." +
+                " Return only the JSON dictated by the format instructions." +
                 "{format_instructions}",
             ),
         ]
