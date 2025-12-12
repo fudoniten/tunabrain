@@ -4,12 +4,17 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    nix-helpers = {
+      url = "github:fudoniten/fudo-nix-helpers";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, nix-helpers, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
+        helpers = nix-helpers.packages."${system}";
         pythonEnv = pkgs.python311.withPackages (ps: [
           ps.fastapi
           ps.uvicorn
@@ -28,9 +33,28 @@
           '';
         };
       in {
-        packages.default = tunabrainServer;
+        packages = rec {
+          default = tunabrain;
+          tunabrain = tunabrainServer;
+          deployContainer = helpers.deployContainers {
+            name = "tunabrain";
+            repo = "registry.kube.sea.fud.link";
+            tags = [ "latest" ];
+            entrypoint = [ "${tunabrain}/bin/tunabrain" ];
+            verbose = true;
+          };
+        };
 
-        apps.default = flake-utils.lib.mkApp { drv = tunabrainServer; };
+        apps = rec {
+          default = tunabrain;
+          tunabrain = flake-utils.lib.mkApp { drv = tunabrainServer; };
+          deployContainer = {
+            type = "app";
+            program =
+              let deployContainer = self.packages."${system}".deployContainer;
+              in "${deployContainer}/bin/deployContainers";
+          };
+        };
 
         devShells.default = pkgs.mkShell {
           name = "tunabrain-dev";

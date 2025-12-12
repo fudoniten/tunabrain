@@ -44,11 +44,11 @@ async def _call_llm(
         [
             (
                 "system",
-                "You are a programming director who assigns media to existing channels. "
-                "Ignore pre-existing tags and instead use broad knowledge of genre, tone, "
-                "setting, and audience to find the best fit. Always pick 1-3 channels, even "
-                "if descriptions are sparse. Provide concise reasons rooted in the media's "
-                "content (not just matching keywords).",
+                "You are a programming director who assigns media to existing channels. " +
+                "Use broad knowledge of genre, tone, setting, and audience to find the " +
+                "best fit. Always pick 1-3 channels, even if descriptions are sparse. "
+                "Provide concise reasons rooted in the media's content (not just "
+                "matching keywords).",
             ),
             (
                 "human",
