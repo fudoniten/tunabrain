@@ -1,7 +1,23 @@
 import pytest
+from langchain_core.messages import AIMessage
 
 from tunabrain.api.models import Channel, MediaItem
 from tunabrain.chains.channel_mapping import map_media_to_channels
+
+
+class StubLLM:
+    def __init__(self, responses: list[str]):
+        self._responses = responses
+
+    async def ainvoke(self, _messages):
+        if not self._responses:
+            raise RuntimeError("No stub responses remaining")
+        return AIMessage(content=self._responses.pop(0))
+
+
+class FailingLLM:
+    async def ainvoke(self, _messages):  # pragma: no cover - fallback path
+        raise RuntimeError("LLM unavailable")
 
 
 @pytest.mark.anyio
@@ -34,9 +50,17 @@ async def test_channel_mapping_assigns_expected_channels():
         description="Classic anthology series exploring speculative fiction stories.",
     )
 
-    simpsons_mapping = await map_media_to_channels(simpsons, channels)
-    futurama_mapping = await map_media_to_channels(futurama, channels)
-    twilight_mapping = await map_media_to_channels(twilight_zone, channels)
+    llm = StubLLM(
+        [
+            '{"mappings": [{"channel_name": "Toon", "reasons": ["Animation focus"]}, {"channel_name": "Sitcom", "reasons": ["Comedy focus"]}]}',
+            '{"mappings": [{"channel_name": "Toon", "reasons": ["Animated ensemble"]}, {"channel_name": "SciFi", "reasons": ["Futuristic setting"]}]}',
+            '{"mappings": [{"channel_name": "SciFi", "reasons": ["Speculative anthology"]}, {"channel_name": "Classics", "reasons": ["Vintage television"]}]}',
+        ]
+    )
+
+    simpsons_mapping = await map_media_to_channels(simpsons, channels, llm=llm)
+    futurama_mapping = await map_media_to_channels(futurama, channels, llm=llm)
+    twilight_mapping = await map_media_to_channels(twilight_zone, channels, llm=llm)
 
     assert {m.channel_name for m in simpsons_mapping} == {"Toon", "Sitcom"}
     assert {m.channel_name for m in futurama_mapping} == {"Toon", "SciFi"}
@@ -62,7 +86,7 @@ async def test_channel_mapping_limits_selection_but_returns_at_least_one():
         description="No metadata available",
     )
 
-    mapping = await map_media_to_channels(media, channels)
+    mapping = await map_media_to_channels(media, channels, llm=FailingLLM())
 
     assert 1 <= len(mapping) <= 3
     assert mapping[0].channel_name == "General"
