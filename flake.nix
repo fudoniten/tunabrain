@@ -38,7 +38,7 @@
           tunabrain = tunabrainServer;
           deployContainer = helpers.deployContainers {
             name = "tunabrain";
-            repo = "registry.kube.sea.fud.link";
+            repo = "registry.kube.sea.fudo.link";
             tags = [ "latest" ];
             entrypoint = [ "${tunabrain}/bin/tunabrain" ];
             verbose = true;
