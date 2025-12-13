@@ -70,6 +70,54 @@ class ChannelMappingResponse(BaseModel):
     mappings: list[ChannelMapping]
 
 
+class DimensionSelection(BaseModel):
+    """Selected scheduling-friendly attributes for a media item."""
+
+    dimension: str = Field(..., description="Name of the scheduling dimension")
+    values: list[str] = Field(default_factory=list, description="Chosen values")
+    notes: list[str] = Field(
+        default_factory=list,
+        description="Short notes or reasons for the chosen values",
+    )
+
+
+class CategoryDefinition(BaseModel):
+    """Definition of a categorization dimension provided by the caller."""
+
+    description: str = Field(..., description="What the dimension represents")
+    values: list[str] = Field(
+        default_factory=list, description="Candidate values the model may choose from"
+    )
+
+
+class CategorizationRequest(BaseModel):
+    """Request to categorize media across scheduling-friendly dimensions."""
+
+    media: MediaItem
+    categories: dict[str, CategoryDefinition] = Field(
+        default_factory=dict,
+        description="Dimensions with descriptions and allowable values",
+    )
+    channels: list[Channel] = Field(
+        default_factory=list,
+        description="Optional channels to consider for mapping (used for backward compatibility)",
+    )
+    debug: bool = Field(
+        False,
+        description="Enable debug logging for outgoing LLM and downstream service calls",
+    )
+
+
+class CategorizationResponse(BaseModel):
+    dimensions: list[DimensionSelection] = Field(
+        default_factory=list, description="Scheduling-friendly dimension selections"
+    )
+    mappings: list[ChannelMapping] = Field(
+        default_factory=list,
+        description="Optional channel mapping suggestions for compatibility",
+    )
+
+
 class DailySlot(BaseModel):
     """A single time slot on a given day."""
 

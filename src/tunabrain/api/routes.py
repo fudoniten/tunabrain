@@ -5,6 +5,8 @@ from fastapi import APIRouter
 from tunabrain.api.models import (
     BumperRequest,
     BumperResponse,
+    CategorizationRequest,
+    CategorizationResponse,
     ChannelMappingRequest,
     ChannelMappingResponse,
     ScheduleRequest,
@@ -13,6 +15,7 @@ from tunabrain.api.models import (
     TaggingResponse,
 )
 from tunabrain.chains.bumpers import generate_bumpers
+from tunabrain.chains.categorization import categorize_media
 from tunabrain.chains.channel_mapping import map_media_to_channels
 from tunabrain.chains.scheduling import build_schedule
 from tunabrain.chains.tagging import generate_tags
@@ -39,11 +42,25 @@ async def tag_media(request: TaggingRequest) -> TaggingResponse:
 @router.post("/channel-mapping", response_model=ChannelMappingResponse)
 async def channel_mapping(request: ChannelMappingRequest) -> ChannelMappingResponse:
     mappings = await map_media_to_channels(
-        request.media,
-        request.channels,
+        media=request.media,
+        channels=request.channels,
         debug=is_debug_enabled(request.debug),
     )
     return ChannelMappingResponse(mappings=mappings)
+
+
+@router.post("/categorize", response_model=CategorizationResponse)
+async def categorize(request: CategorizationRequest) -> CategorizationResponse:
+    categorization = await categorize_media(
+        media=request.media,
+        categories=request.categories,
+        channels=request.channels,
+        debug=is_debug_enabled(request.debug),
+    )
+    return CategorizationResponse(
+        dimensions=categorization.dimensions,
+        mappings=categorization.channel_mappings,
+    )
 
 
 @router.post("/schedule", response_model=ScheduleResponse)
