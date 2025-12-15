@@ -41,7 +41,7 @@
             name = "tunabrain";
             repo = "registry.kube.sea.fudo.link";
             tags = [ "latest" ];
-            entrypoint = [ "tunabrain" ];
+            entrypoint = [ "${tunabrain}/bin/tunabrain" ];
             environmentPackages = [ tunabrain ];
             verbose = true;
           };
