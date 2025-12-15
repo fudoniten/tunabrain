@@ -36,11 +36,13 @@
         packages = rec {
           default = tunabrain;
           tunabrain = tunabrainServer;
-          deployContainer = helpers.deployContainers {
+          deployContainer = let tunabrain = self.packages."${system}".tunabrain;
+          in helpers.deployContainers {
             name = "tunabrain";
             repo = "registry.kube.sea.fudo.link";
             tags = [ "latest" ];
-            entrypoint = [ "${tunabrain}/bin/tunabrain" ];
+            entrypoint = [ "tunabrain" ];
+            environmentPackages = [ tunabrain ];
             verbose = true;
           };
         };
