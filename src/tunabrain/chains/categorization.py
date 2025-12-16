@@ -155,6 +155,13 @@ async def categorize_media(
     llm_instance = llm or get_chat_model()
     channels_list = channels or []
 
+    logger.info(
+        "Categorizing media '%s' with %s dimensions and %s channels",
+        media.title,
+        len(categories),
+        len(channels_list),
+    )
+
     wikipedia = WikipediaLookup(debug=debug_enabled, llm=llm_instance)
     wikipedia_summary = "Wikipedia summary not available."
     try:
@@ -206,5 +213,11 @@ async def categorize_media(
     if not result.dimensions:
         result.dimensions = _fallback_dimensions(categories)
 
+    logger.info(
+        "Categorization complete for '%s' with %s dimensions and %s channel mappings",
+        media.title,
+        len(result.dimensions),
+        len(result.channel_mappings),
+    )
     return result
 

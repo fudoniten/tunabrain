@@ -2,9 +2,14 @@ from __future__ import annotations
 
 """Utilities for constructing LangChain chat models with project defaults."""
 
+import logging
+
 from langchain.chat_models import init_chat_model
 
 from tunabrain.config import get_settings
+
+
+logger = logging.getLogger(__name__)
 
 
 def get_chat_model():
@@ -18,6 +23,9 @@ def get_chat_model():
     if settings.llm_provider == "openai" and settings.openai_api_key:
         init_kwargs["api_key"] = settings.openai_api_key
 
+    logger.info(
+        "Initializing chat model: provider=%s model=%s", settings.llm_provider, settings.llm_model
+    )
     return init_chat_model(
         model=settings.llm_model,
         model_provider=settings.llm_provider,

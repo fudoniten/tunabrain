@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import logging
+
 from tunabrain.api.models import Channel, MediaItem, ScheduleResponse
+
+
+logger = logging.getLogger(__name__)
 
 
 async def build_schedule(
@@ -18,5 +23,10 @@ async def build_schedule(
     daily time slots with content that respects the provided instructions.
     """
 
+    logger.info(
+        "Schedule generation requested for channel='%s' with %s media items", 
+        channel.name,
+        len(media),
+    )
     raise NotImplementedError("Scheduling chain is not implemented yet")
 

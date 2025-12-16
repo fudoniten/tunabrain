@@ -7,9 +7,13 @@ selection can be controlled without code changes. Defaults favor OpenAI since th
 project ships with prompts tuned for that provider.
 """
 
+import logging
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -36,12 +40,19 @@ def _env_flag(name: str, default: bool = False) -> bool:
 def get_settings() -> Settings:
     """Load settings from the environment with sensible defaults."""
 
-    return Settings(
+    settings = Settings(
         llm_provider=os.getenv("TUNABRAIN_LLM_PROVIDER", "openai"),
         llm_model=os.getenv("TUNABRAIN_LLM_MODEL", "gpt-4o-mini"),
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         debug_enabled=_env_flag("TUNABRAIN_DEBUG", False),
     )
+    logger.info(
+        "Loaded settings: provider=%s model=%s debug=%s", 
+        settings.llm_provider,
+        settings.llm_model,
+        settings.debug_enabled,
+    )
+    return settings
 
 
 def is_debug_enabled(request_debug: bool = False) -> bool:

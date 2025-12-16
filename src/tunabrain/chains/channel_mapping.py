@@ -113,6 +113,9 @@ async def map_media_to_channels(
     if not channels:
         return []
 
+    logger.info(
+        "Mapping media '%s' to %s channels", media.title, len(channels)
+    )
     debug_enabled = is_debug_enabled(debug)
     parser = PydanticOutputParser(pydantic_object=ChannelMappingResult)
 
@@ -127,6 +130,7 @@ async def map_media_to_channels(
             debug=debug_enabled,
         )
         mappings = result.mappings[:3]
+        logger.info("LLM returned %s channel mappings for '%s'", len(mappings), media.title)
     except OutputParserException as exc:
         logger.error(
             "Failed to parse LLM channel mapping response. llm_output=%s",
@@ -137,5 +141,9 @@ async def map_media_to_channels(
         logger.warning("LLM channel mapping failed: %s", exc)
         mappings = _fallback_mapping(channels)
 
+    if mappings:
+        logger.info(
+            "Returning %s channel mappings for '%s'", len(mappings), media.title
+        )
     return mappings if mappings else _fallback_mapping(channels)
 
