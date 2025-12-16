@@ -43,6 +43,7 @@
             tags = [ "latest" ];
             entrypoint = [ "${tunabrain}/bin/tunabrain" ];
             environmentPackages = [ tunabrain ];
+            envPath = [ tunabrain ];
             verbose = true;
           };
         };
