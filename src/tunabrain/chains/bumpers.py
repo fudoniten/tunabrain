@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import logging
+
 from tunabrain.api.models import Bumper, Channel
+
+
+logger = logging.getLogger(__name__)
 
 
 async def generate_bumpers(
@@ -17,5 +22,10 @@ async def generate_bumpers(
     channel identity and upcoming programming blocks.
     """
 
+    logger.info(
+        "Bumper generation requested for channel='%s' (duration=%ss)",
+        channel.name,
+        duration_seconds,
+    )
     raise NotImplementedError("Bumper generation chain is not implemented yet")
 

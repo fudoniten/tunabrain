@@ -34,6 +34,7 @@ async def generate_tags(
     concise tags that help place the media into thematic schedules.
     """
 
+    logger.info("Generating tags for '%s'", media.title)
     debug_enabled = is_debug_enabled(debug)
 
     llm = get_chat_model()
@@ -189,4 +190,5 @@ async def generate_tags(
     if debug_enabled:
         logger.debug("LLM response (final tags): %s", result.model_dump())
 
+    logger.info("Generated %s tags for '%s'", len(result.tags), media.title)
     return result.tags

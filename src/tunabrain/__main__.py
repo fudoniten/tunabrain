@@ -5,6 +5,7 @@ import logging
 import uvicorn
 
 from tunabrain.app import app
+from tunabrain.logging import configure_logging
 
 
 def main() -> None:
@@ -17,10 +18,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    )
+    configure_logging()
+    logger = logging.getLogger(__name__)
+    logger.info("Starting TunaBrain with port=%s", args.port)
     uvicorn.run(app, host="0.0.0.0", port=args.port)
 
 
