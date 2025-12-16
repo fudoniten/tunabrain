@@ -42,8 +42,6 @@
             repo = "registry.kube.sea.fudo.link";
             tags = [ "latest" ];
             entrypoint = [ "${tunabrain}/bin/tunabrain-server" ];
-            environmentPackages = [ tunabrain ];
-            envPath = [ tunabrain ];
             verbose = true;
           };
         };
