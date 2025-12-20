@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -48,6 +49,19 @@ class TaggingRequest(BaseModel):
 
 class TaggingResponse(BaseModel):
     tags: list[str]
+
+
+class TagSample(BaseModel):
+    """Metadata about an existing tag for governance review."""
+
+    tag: str = Field(..., description="The original tag value to review")
+    usage_count: int = Field(
+        0,
+        description="Approximate usage count for prioritization; may be zero when unknown",
+    )
+    example_titles: list[str] = Field(
+        default_factory=list, description="Representative titles that use this tag"
+    )
 
 
 class ChannelMappingRequest(BaseModel):
@@ -173,4 +187,43 @@ class Bumper(BaseModel):
 
 class BumperResponse(BaseModel):
     bumpers: list[Bumper]
+
+
+class TagDecision(BaseModel):
+    """Recommended action for a tag during cleanup/governance."""
+
+    tag: str = Field(..., description="The original tag that was evaluated")
+    action: Literal["keep", "drop", "merge", "rename"] = Field(
+        ..., description="Governance action to take"
+    )
+    replacement: str | None = Field(
+        None,
+        description=(
+            "Replacement or canonical tag when the action is merge or rename; null for"
+            " keep or drop actions"
+        ),
+    )
+    rationale: str = Field(
+        ..., description="Short scheduling-focused reason for the recommendation"
+    )
+
+
+class TagTriageRequest(BaseModel):
+    """Request to triage tags for scheduling usefulness and consolidation."""
+
+    tags: list[TagSample] = Field(default_factory=list)
+    target_limit: int | None = Field(
+        None,
+        description="Optional target tag count to help the model consolidate aggressively",
+    )
+    debug: bool = Field(
+        False,
+        description="Enable debug logging for outgoing LLM and downstream service calls",
+    )
+
+
+class TagTriageResponse(BaseModel):
+    decisions: list[TagDecision] = Field(
+        default_factory=list, description="Per-tag governance recommendations"
+    )
 
