@@ -15,11 +15,14 @@ from tunabrain.api.models import (
     ScheduleResponse,
     TaggingRequest,
     TaggingResponse,
+    TagTriageRequest,
+    TagTriageResponse,
 )
 from tunabrain.chains.bumpers import generate_bumpers
 from tunabrain.chains.categorization import categorize_media
 from tunabrain.chains.channel_mapping import map_media_to_channels
 from tunabrain.chains.scheduling import build_schedule
+from tunabrain.chains.tag_governance import triage_tags
 from tunabrain.chains.tagging import generate_tags
 from tunabrain.config import is_debug_enabled
 
@@ -113,4 +116,16 @@ async def bumpers(request: BumperRequest) -> BumperResponse:
     )
     logger.info("Generated %s bumpers for channel='%s'", len(bumpers), request.channel.name)
     return BumperResponse(bumpers=bumpers)
+
+
+@router.post("/tag-governance/triage", response_model=TagTriageResponse)
+async def triage_tag_governance(request: TagTriageRequest) -> TagTriageResponse:
+    logger.info("Processing tag governance triage for %s tags", len(request.tags))
+    decisions = await triage_tags(
+        request.tags,
+        target_limit=request.target_limit,
+        debug=is_debug_enabled(request.debug),
+    )
+    logger.info("Completed governance triage with %s recommendations", len(decisions))
+    return TagTriageResponse(decisions=decisions)
 
