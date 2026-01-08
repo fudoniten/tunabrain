@@ -8,7 +8,7 @@ from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
-from tunabrain.api.models import TagDecision, TagSample
+from tunabrain.api.models import TagAuditResult, TagDecision, TagSample
 from tunabrain.config import is_debug_enabled
 from tunabrain.llm import get_chat_model
 
@@ -117,3 +117,101 @@ async def triage_tags(
 
     logger.info("Generated governance recommendations for %s tags", len(decisions))
     return decisions
+
+
+class TagAuditBatchResult(BaseModel):
+    """Structured audit output for a batch of tags."""
+
+    tags_to_delete: list[TagAuditResult] = Field(
+        default_factory=list,
+        description="Tags that should be deleted because they're not useful for scheduling",
+    )
+
+
+async def audit_tags(
+    tags: list[str], *, debug: bool = False
+) -> list[TagAuditResult]:
+    """Audit tags for scheduling usefulness and recommend deletions.
+
+    The LLM evaluates each tag to determine if it's useful for TV channel scheduling.
+    Tags that are too obscure, too detailed, too generic, or otherwise not useful
+    for scheduling are recommended for deletion.
+    """
+
+    if not tags:
+        return []
+
+    debug_enabled = is_debug_enabled(debug)
+    llm = get_chat_model()
+
+    parser = PydanticOutputParser(pydantic_object=TagAuditBatchResult)
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "You are auditing a media-tag taxonomy for TV channel scheduling. Your goal "
+                "is to identify tags that are NOT useful for scheduling TV channels and "
+                "should be deleted. A tag should be deleted if it is:\n"
+                "- Too obscure or niche for scheduling decisions\n"
+                "- Too detailed or specific (e.g., ultra-specific plot details)\n"
+                "- Too generic or vague to be actionable\n"
+                "- Not relevant to TV scheduling needs (audience, tone, genre, events, seasons)\n"
+                "- Ideological, political, or not audience-facing\n\n"
+                "Only return tags that should be DELETED. Tags that are useful for scheduling "
+                "should not be included in the output.",
+            ),
+            (
+                "human",
+                "Audit the following tags and identify which ones should be deleted because "
+                "they are not useful for TV channel scheduling. For each tag you recommend "
+                "deleting, provide a clear reason.\n\n"
+                "Tags to audit:\n{tag_list}\n\n"
+                "Return structured JSON with only the tags that should be deleted.\n"
+                "{format_instructions}",
+            ),
+        ]
+    )
+
+    async def evaluate_batch(batch: list[str]) -> list[TagAuditResult]:
+        tag_bullets = "\n".join(f"- {tag}" for tag in batch)
+
+        inputs = {
+            "tag_list": tag_bullets,
+            "format_instructions": f"\n\n{parser.get_format_instructions()}",
+        }
+
+        if debug_enabled:
+            logger.debug("LLM request (tag audit batch): %s", inputs)
+
+        messages = prompt.format_messages(**inputs)
+        response = await llm.ainvoke(messages)
+        if debug_enabled:
+            logger.debug("LLM raw response (tag audit batch): %s", response)
+
+        try:
+            result: TagAuditBatchResult = await parser.ainvoke(response)
+        except OutputParserException as exc:
+            logger.error(
+                "Failed to parse tag audit batch. llm_output=%s",
+                getattr(exc, "llm_output", "<missing>"),
+            )
+            raise
+
+        if debug_enabled:
+            logger.debug("LLM parsed response (tag audit batch): %s", result.model_dump())
+
+        return result.tags_to_delete
+
+    results: list[TagAuditResult] = []
+    batch_size = 75
+    for idx in range(0, len(tags), batch_size):
+        batch = tags[idx : idx + batch_size]
+        batch_results = await evaluate_batch(batch)
+        # Deduplicate by tag name
+        for audit_result in batch_results:
+            if not any(existing.tag == audit_result.tag for existing in results):
+                results.append(audit_result)
+
+    logger.info("Identified %s tags for deletion out of %s audited", len(results), len(tags))
+    return results
