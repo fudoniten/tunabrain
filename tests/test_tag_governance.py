@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 
 from tunabrain.app import create_app
 import tunabrain.api.routes as routes
-from tunabrain.api.models import TagDecision
+from tunabrain.api.models import TagAuditResult, TagDecision
 
 
 def test_tag_governance_triage_endpoint(monkeypatch):
@@ -37,5 +37,48 @@ def test_tag_governance_triage_endpoint(monkeypatch):
                 "replacement": "vampires",
                 "rationale": "Too narrow; merge into broader vampire programming",
             }
+        ]
+    }
+
+
+def test_tag_audit_endpoint(monkeypatch):
+    client = TestClient(create_app())
+
+    async def fake_audit(tags, *, debug=False):  # pragma: no cover - simple stub
+        return [
+            TagAuditResult(
+                tag="ultra_specific_plot_detail",
+                reason="Too detailed and specific for scheduling decisions",
+            ),
+            TagAuditResult(
+                tag="obscure_reference",
+                reason="Too obscure for general TV channel scheduling",
+            ),
+        ]
+
+    monkeypatch.setattr(routes, "audit_tags", fake_audit)
+
+    payload = {
+        "tags": [
+            "action",
+            "comedy",
+            "ultra_specific_plot_detail",
+            "obscure_reference",
+            "family_friendly",
+        ]
+    }
+
+    response = client.post("/tags/audit", json=payload)
+    assert response.status_code == 200
+    assert response.json() == {
+        "tags_to_delete": [
+            {
+                "tag": "ultra_specific_plot_detail",
+                "reason": "Too detailed and specific for scheduling decisions",
+            },
+            {
+                "tag": "obscure_reference",
+                "reason": "Too obscure for general TV channel scheduling",
+            },
         ]
     }

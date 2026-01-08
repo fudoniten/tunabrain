@@ -13,6 +13,8 @@ from tunabrain.api.models import (
     ChannelMappingResponse,
     ScheduleRequest,
     ScheduleResponse,
+    TagAuditRequest,
+    TagAuditResponse,
     TaggingRequest,
     TaggingResponse,
     TagTriageRequest,
@@ -22,7 +24,7 @@ from tunabrain.chains.bumpers import generate_bumpers
 from tunabrain.chains.categorization import categorize_media
 from tunabrain.chains.channel_mapping import map_media_to_channels
 from tunabrain.chains.scheduling import build_schedule
-from tunabrain.chains.tag_governance import triage_tags
+from tunabrain.chains.tag_governance import audit_tags, triage_tags
 from tunabrain.chains.tagging import generate_tags
 from tunabrain.config import is_debug_enabled
 
@@ -128,4 +130,19 @@ async def triage_tag_governance(request: TagTriageRequest) -> TagTriageResponse:
     )
     logger.info("Completed governance triage with %s recommendations", len(decisions))
     return TagTriageResponse(decisions=decisions)
+
+
+@router.post("/tags/audit", response_model=TagAuditResponse)
+async def audit_tag_usefulness(request: TagAuditRequest) -> TagAuditResponse:
+    logger.info("Processing tag audit for %s tags", len(request.tags))
+    tags_to_delete = await audit_tags(
+        request.tags,
+        debug=is_debug_enabled(request.debug),
+    )
+    logger.info(
+        "Completed tag audit: %s of %s tags recommended for deletion",
+        len(tags_to_delete),
+        len(request.tags),
+    )
+    return TagAuditResponse(tags_to_delete=tags_to_delete)
 

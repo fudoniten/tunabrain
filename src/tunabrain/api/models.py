@@ -227,3 +227,37 @@ class TagTriageResponse(BaseModel):
         default_factory=list, description="Per-tag governance recommendations"
     )
 
+
+class TagAuditRequest(BaseModel):
+    """Request to audit tags for scheduling usefulness."""
+
+    tags: list[str] = Field(
+        ..., description="List of tag names to audit for scheduling applicability"
+    )
+    debug: bool = Field(
+        False,
+        description="Enable debug logging for outgoing LLM and downstream service calls",
+    )
+
+
+class TagAuditResult(BaseModel):
+    """Result indicating whether a tag should be deleted and why."""
+
+    tag: str = Field(..., description="The tag that was audited")
+    reason: str = Field(
+        ...,
+        description=(
+            "Reason why this tag should be deleted (e.g., too obscure, too detailed, "
+            "too generic, not relevant for TV scheduling)"
+        ),
+    )
+
+
+class TagAuditResponse(BaseModel):
+    """Response containing tags recommended for deletion."""
+
+    tags_to_delete: list[TagAuditResult] = Field(
+        default_factory=list,
+        description="Tags that should be deleted because they're not useful for scheduling",
+    )
+
