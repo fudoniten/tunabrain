@@ -89,10 +89,15 @@ async def categorize(request: CategorizationRequest) -> CategorizationResponse:
 @router.post("/schedule", response_model=ScheduleResponse)
 async def schedule(request: ScheduleRequest) -> ScheduleResponse:
     logger.info(
-        "Processing schedule request for channel='%s' with %s media items",
+        "Processing schedule request for channel='%s' with %s media items, "
+        "start_date='%s', cost_tier='%s'",
         request.channel.name,
         len(request.media),
+        request.start_date.strftime("%Y-%m-%d"),
+        request.cost_tier,
     )
+    # Note: build_schedule now accepts old-style params but converts to ScheduleRequest internally
+    # In future, we can pass request directly to build_schedule_with_agent
     return await build_schedule(
         channel=request.channel,
         media=request.media,
@@ -145,4 +150,3 @@ async def audit_tag_usefulness(request: TagAuditRequest) -> TagAuditResponse:
         len(request.tags),
     )
     return TagAuditResponse(tags_to_delete=tags_to_delete)
-
