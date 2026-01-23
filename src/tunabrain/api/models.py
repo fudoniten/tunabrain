@@ -137,20 +137,71 @@ class DailySlot(BaseModel):
 
     start_time: datetime
     end_time: datetime
-    media_id: str | None = Field(None, description="Media item scheduled for this slot")
+    media_id: str | None = Field(
+        None,
+        description="Media identifier: 'random:category', 'series:show-id', or 'movie:movie-id'",
+    )
+    media_selection_strategy: Literal["random", "sequential", "specific"] = Field(
+        "random", description="How to select specific content within this slot"
+    )
+    category_filters: list[str] = Field(
+        default_factory=list,
+        description="Category tags to filter content (e.g., ['comedy', 'sitcom'])",
+    )
     notes: list[str] = Field(default_factory=list)
 
 
 class ScheduleRequest(BaseModel):
-    """Request to build a schedule for a channel and media set."""
+    """Request to build or extend a TV schedule."""
 
     channel: Channel
     media: list[MediaItem]
-    user_instructions: str | None = Field(
-        None, description="User guidance for the schedule"
+
+    # Scheduling parameters
+    start_date: datetime = Field(
+        ..., description="Start date/time for the schedule window (server local time)"
     )
-    scheduling_window_days: int = Field(
-        30, description="How many days the resulting schedule should cover"
+    scheduling_window_days: int = Field(7, description="Number of days to schedule", ge=1, le=90)
+    end_date: datetime | None = Field(
+        None,
+        description="Optional explicit end date (calculated from start_date + window_days if not provided)",
+    )
+
+    # Instructions and constraints
+    user_instructions: str | None = Field(
+        None,
+        description="Natural language scheduling instructions (e.g., 'Weekday mornings: random sitcoms')",
+    )
+
+    # Slot management
+    preferred_slots: list[str] | None = Field(
+        None,
+        description="Preferred slot times in HH:MM format (e.g., ['08:00', '12:00', '18:00'])",
+    )
+    daily_slots: list[DailySlot] = Field(
+        default_factory=list,
+        description="Pre-scheduled slots that should not be modified (for gap-filling mode)",
+    )
+
+    # Cost and performance
+    cost_tier: Literal["economy", "balanced", "premium"] = Field(
+        "balanced",
+        description="Cost vs quality tradeoff (economy=local models, balanced=GPT-4o-mini, premium=GPT-4o)",
+    )
+    max_iterations: int = Field(
+        50, description="Maximum agent iterations before stopping", ge=10, le=200
+    )
+    quality_threshold: float = Field(
+        0.7,
+        description="Minimum quality score to consider schedule complete (0.0-1.0)",
+        ge=0.0,
+        le=1.0,
+    )
+
+    # Debugging
+    debug: bool = Field(
+        False,
+        description="Enable debug logging for LLM calls and tool executions",
     )
     debug: bool = Field(
         False,
@@ -158,10 +209,42 @@ class ScheduleRequest(BaseModel):
     )
 
 
+class ReasoningSummary(BaseModel):
+    """Summary of agent's decision-making process."""
+
+    total_iterations: int = Field(..., description="Number of agent iterations executed")
+    key_decisions: list[str] = Field(
+        default_factory=list,
+        description="5-10 most important decisions made by the agent",
+    )
+    constraints_applied: list[str] = Field(
+        default_factory=list,
+        description="Parsed constraints that guided scheduling",
+    )
+    completion_status: Literal["complete", "partial", "failed"] = Field(
+        ..., description="Whether schedule was fully completed"
+    )
+    unfilled_slots_count: int = Field(0, description="Number of time slots that remain unfilled")
+    quality_score: float = Field(0.0, description="Overall quality score (0.0-1.0)", ge=0.0, le=1.0)
+    cost_estimate: dict = Field(
+        default_factory=dict,
+        description="Estimated cost breakdown for this schedule generation",
+    )
+
+
 class ScheduleResponse(BaseModel):
-    overview: str
-    weekly_plan: list[str] = Field(default_factory=list)
-    daily_slots: list[DailySlot] = Field(default_factory=list)
+    """Response with generated schedule and reasoning."""
+
+    overview: str = Field(..., description="High-level summary of the schedule")
+    reasoning_summary: ReasoningSummary = Field(
+        ..., description="Agent's decision-making process and results"
+    )
+    weekly_plan: list[str] = Field(
+        default_factory=list, description="Day-by-day summary of scheduled content"
+    )
+    daily_slots: list[DailySlot] = Field(
+        default_factory=list, description="Complete list of scheduled slots"
+    )
 
 
 class BumperRequest(BaseModel):
@@ -260,4 +343,3 @@ class TagAuditResponse(BaseModel):
         default_factory=list,
         description="Tags that should be deleted because they're not useful for scheduling",
     )
-
