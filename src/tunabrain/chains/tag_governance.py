@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Iterable
 
 from langchain_core.exceptions import OutputParserException
@@ -13,6 +14,29 @@ from tunabrain.config import is_debug_enabled
 from tunabrain.llm import get_chat_model
 
 logger = logging.getLogger(__name__)
+
+
+def strip_json_comments(text: str) -> str:
+    """Remove // comments from JSON text.
+    
+    LLMs sometimes add comments to JSON output which breaks parsing.
+    This removes single-line // comments while preserving strings.
+    """
+    # Remove // comments line by line
+    lines = []
+    for line in text.split('\n'):
+        if '//' in line:
+            # Count quotes before // to see if it's inside a string
+            before_comment = line[:line.index('//')]
+            quote_count = before_comment.count('"') - before_comment.count('\\"')
+            # If even number of quotes, the // is outside strings
+            if quote_count % 2 == 0:
+                line = before_comment.rstrip()
+                # Clean up trailing commas if needed
+                if line.rstrip().endswith(','):
+                    line = line.rstrip()
+        lines.append(line)
+    return '\n'.join(lines)
 
 
 class TagBatchReview(BaseModel):
@@ -190,7 +214,14 @@ async def audit_tags(
             logger.debug("LLM raw response (tag audit batch): %s", response)
 
         try:
-            result: TagAuditBatchResult = await parser.ainvoke(response)
+            # Strip comments from LLM output before parsing
+            cleaned_content = strip_json_comments(response.content)
+            # Create a modified response with cleaned content
+            from copy import copy
+            cleaned_response = copy(response)
+            cleaned_response.content = cleaned_content
+            
+            result: TagAuditBatchResult = await parser.ainvoke(cleaned_response)
         except OutputParserException as exc:
             logger.error(
                 "Failed to parse tag audit batch. llm_output=%s",
