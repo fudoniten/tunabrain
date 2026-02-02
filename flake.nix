@@ -59,7 +59,13 @@
 
         devShells.default = pkgs.mkShell {
           name = "tunabrain-dev";
-          packages = [ pythonEnv pkgs.ruff pkgs.python311Packages.pytest ];
+          packages = [
+            pythonEnv
+            pkgs.ruff
+            pkgs.python311Packages.pytest
+            pkgs.python311Packages.pytest-asyncio
+            pkgs.python311Packages.anyio
+          ];
           shellHook = ''
             export PYTHONPATH=${builtins.getEnv "PWD"}/src:$PYTHONPATH
           '';
@@ -69,7 +75,12 @@
           pname = "tunabrain-tests";
           version = "0.1.0";
           src = ./.;
-          buildInputs = [ pythonEnv pkgs.python311Packages.pytest ];
+          buildInputs = [
+            pythonEnv
+            pkgs.python311Packages.pytest
+            pkgs.python311Packages.pytest-asyncio
+            pkgs.python311Packages.anyio
+          ];
 
           buildPhase = ''
             runHook preBuild

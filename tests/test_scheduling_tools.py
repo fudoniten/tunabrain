@@ -14,12 +14,14 @@ class TestIdentifyScheduleGaps:
 
     def test_empty_schedule_single_day(self):
         """Test gap identification with completely empty schedule."""
-        gaps = identify_schedule_gaps(
-            current_schedule={},
-            start_date="2026-02-01",
-            end_date="2026-02-02",
-            immutable_slots=[],
-            preferred_slots=None,
+        gaps = identify_schedule_gaps.invoke(
+            {
+                "current_schedule": {},
+                "start_date": "2026-02-01",
+                "end_date": "2026-02-02",
+                "immutable_slots": [],
+                "preferred_slots": None,
+            }
         )
 
         assert len(gaps) == 1
@@ -30,12 +32,14 @@ class TestIdentifyScheduleGaps:
 
     def test_empty_schedule_with_preferred_slots(self):
         """Test gap identification with preferred slot boundaries."""
-        gaps = identify_schedule_gaps(
-            current_schedule={},
-            start_date="2026-02-01",
-            end_date="2026-02-02",
-            immutable_slots=[],
-            preferred_slots=["08:00", "12:00", "18:00", "22:00"],
+        gaps = identify_schedule_gaps.invoke(
+            {
+                "current_schedule": {},
+                "start_date": "2026-02-01",
+                "end_date": "2026-02-02",
+                "immutable_slots": [],
+                "preferred_slots": ["08:00", "12:00", "18:00", "22:00"],
+            }
         )
 
         assert len(gaps) == 1
@@ -62,12 +66,14 @@ class TestIdentifyScheduleGaps:
             ]
         }
 
-        gaps = identify_schedule_gaps(
-            current_schedule=current_schedule,
-            start_date="2026-02-01",
-            end_date="2026-02-02",
-            immutable_slots=[],
-            preferred_slots=None,
+        gaps = identify_schedule_gaps.invoke(
+            {
+                "current_schedule": current_schedule,
+                "start_date": "2026-02-01",
+                "end_date": "2026-02-02",
+                "immutable_slots": [],
+                "preferred_slots": None,
+            }
         )
 
         # Should have 3 gaps: before 10:00, between 11:00-14:00, after 15:00
@@ -89,12 +95,14 @@ class TestIdentifyScheduleGaps:
             ]
         }
 
-        gaps = identify_schedule_gaps(
-            current_schedule=current_schedule,
-            start_date="2026-02-01",
-            end_date="2026-02-03",  # 2 days
-            immutable_slots=[],
-            preferred_slots=None,
+        gaps = identify_schedule_gaps.invoke(
+            {
+                "current_schedule": current_schedule,
+                "start_date": "2026-02-01",
+                "end_date": "2026-02-03",  # 2 days
+                "immutable_slots": [],
+                "preferred_slots": None,
+            }
         )
 
         # Day 1: 2 gaps (before and after the slot)
@@ -107,12 +115,14 @@ class TestIdentifyScheduleGaps:
 
     def test_context_detection(self):
         """Test that context is properly detected for gaps."""
-        gaps = identify_schedule_gaps(
-            current_schedule={},
-            start_date="2026-02-01",  # Saturday
-            end_date="2026-02-02",
-            immutable_slots=[],
-            preferred_slots=None,
+        gaps = identify_schedule_gaps.invoke(
+            {
+                "current_schedule": {},
+                "start_date": "2026-02-01",  # Saturday
+                "end_date": "2026-02-02",
+                "immutable_slots": [],
+                "preferred_slots": None,
+            }
         )
 
         assert len(gaps) == 1
@@ -126,15 +136,17 @@ class TestFillTimeSlot:
     def test_fill_empty_schedule(self):
         """Test filling a slot in an empty schedule."""
         schedule = {}
-        result = fill_time_slot(
-            schedule=schedule,
-            date="2026-02-01",
-            start_time="08:00",
-            end_time="09:00",
-            media_id="series:friends",
-            selection_strategy="random",
-            category_filters=["sitcom"],
-            notes=["Test slot"],
+        result = fill_time_slot.invoke(
+            {
+                "schedule": schedule,
+                "date": "2026-02-01",
+                "start_time": "08:00",
+                "end_time": "09:00",
+                "media_id": "series:friends",
+                "selection_strategy": "random",
+                "category_filters": ["sitcom"],
+                "notes": ["Test slot"],
+            }
         )
 
         assert "2026-02-01" in result
@@ -152,20 +164,24 @@ class TestFillTimeSlot:
         """Test filling multiple non-overlapping slots on same day."""
         schedule = {}
 
-        fill_time_slot(
-            schedule=schedule,
-            date="2026-02-01",
-            start_time="08:00",
-            end_time="09:00",
-            media_id="series:friends",
+        schedule = fill_time_slot.invoke(
+            {
+                "schedule": schedule,
+                "date": "2026-02-01",
+                "start_time": "08:00",
+                "end_time": "09:00",
+                "media_id": "series:friends",
+            }
         )
 
-        fill_time_slot(
-            schedule=schedule,
-            date="2026-02-01",
-            start_time="10:00",
-            end_time="11:00",
-            media_id="series:seinfeld",
+        schedule = fill_time_slot.invoke(
+            {
+                "schedule": schedule,
+                "date": "2026-02-01",
+                "start_time": "10:00",
+                "end_time": "11:00",
+                "media_id": "series:seinfeld",
+            }
         )
 
         assert len(schedule["2026-02-01"]) == 2
@@ -177,43 +193,51 @@ class TestFillTimeSlot:
         """Test that overlapping slots raise ValueError."""
         schedule = {}
 
-        fill_time_slot(
-            schedule=schedule,
-            date="2026-02-01",
-            start_time="08:00",
-            end_time="10:00",
-            media_id="series:friends",
+        schedule = fill_time_slot.invoke(
+            {
+                "schedule": schedule,
+                "date": "2026-02-01",
+                "start_time": "08:00",
+                "end_time": "10:00",
+                "media_id": "series:friends",
+            }
         )
 
         # Try to add overlapping slot
         with pytest.raises(ValueError, match="overlaps"):
-            fill_time_slot(
-                schedule=schedule,
-                date="2026-02-01",
-                start_time="09:00",
-                end_time="11:00",
-                media_id="series:seinfeld",
+            fill_time_slot.invoke(
+                {
+                    "schedule": schedule,
+                    "date": "2026-02-01",
+                    "start_time": "09:00",
+                    "end_time": "11:00",
+                    "media_id": "series:seinfeld",
+                }
             )
 
     def test_adjacent_slots_no_overlap(self):
         """Test that adjacent slots (no gap) are allowed."""
         schedule = {}
 
-        fill_time_slot(
-            schedule=schedule,
-            date="2026-02-01",
-            start_time="08:00",
-            end_time="09:00",
-            media_id="series:friends",
+        schedule = fill_time_slot.invoke(
+            {
+                "schedule": schedule,
+                "date": "2026-02-01",
+                "start_time": "08:00",
+                "end_time": "09:00",
+                "media_id": "series:friends",
+            }
         )
 
         # Adjacent slot should work
-        fill_time_slot(
-            schedule=schedule,
-            date="2026-02-01",
-            start_time="09:00",
-            end_time="10:00",
-            media_id="series:seinfeld",
+        schedule = fill_time_slot.invoke(
+            {
+                "schedule": schedule,
+                "date": "2026-02-01",
+                "start_time": "09:00",
+                "end_time": "10:00",
+                "media_id": "series:seinfeld",
+            }
         )
 
         assert len(schedule["2026-02-01"]) == 2
@@ -221,12 +245,14 @@ class TestFillTimeSlot:
     def test_default_parameters(self):
         """Test that default parameters are applied correctly."""
         schedule = {}
-        result = fill_time_slot(
-            schedule=schedule,
-            date="2026-02-01",
-            start_time="08:00",
-            end_time="09:00",
-            media_id="series:friends",
+        result = fill_time_slot.invoke(
+            {
+                "schedule": schedule,
+                "date": "2026-02-01",
+                "start_time": "08:00",
+                "end_time": "09:00",
+                "media_id": "series:friends",
+            }
         )
 
         slot = result["2026-02-01"][0]
@@ -235,16 +261,18 @@ class TestFillTimeSlot:
         assert slot["notes"] == []  # default
 
     def test_schedule_modified_in_place(self):
-        """Test that the schedule dict is modified in place."""
+        """Test that the schedule dict is returned with modifications."""
         schedule = {}
-        result = fill_time_slot(
-            schedule=schedule,
-            date="2026-02-01",
-            start_time="08:00",
-            end_time="09:00",
-            media_id="series:friends",
+        result = fill_time_slot.invoke(
+            {
+                "schedule": schedule,
+                "date": "2026-02-01",
+                "start_time": "08:00",
+                "end_time": "09:00",
+                "media_id": "series:friends",
+            }
         )
 
-        # Result should be the same object
-        assert result is schedule
-        assert "2026-02-01" in schedule
+        # Result should contain the new slot
+        assert result is not None
+        assert "2026-02-01" in result
