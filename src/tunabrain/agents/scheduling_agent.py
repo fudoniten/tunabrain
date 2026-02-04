@@ -251,7 +251,10 @@ async def build_schedule_with_agent(request: ScheduleRequest) -> ScheduleRespons
 
     # Run agent
     logger.info("Invoking agent...")
-    final_state = await agent.ainvoke(state)
+    # Set recursion limit based on max_iterations to avoid hitting LangGraph's default limit
+    # Each iteration can involve planner + tools, so we need at least 2x + buffer
+    config = {"recursion_limit": request.max_iterations * 2 + 20}
+    final_state = await agent.ainvoke(state, config=config)
 
     logger.info(
         f"Agent completed after {final_state['iterations']} iterations. "

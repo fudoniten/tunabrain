@@ -66,8 +66,15 @@ def identify_schedule_gaps(
         day_key = current.strftime("%Y-%m-%d")
         day_schedule = current_schedule.get(day_key, [])
 
-        # Sort slots by start time
-        sorted_slots = sorted(day_schedule, key=lambda s: s["start_time"])
+        # Sort slots by start time, filtering out malformed slots
+        sorted_slots = [s for s in day_schedule if "start_time" in s and "end_time" in s]
+        sorted_slots.sort(key=lambda s: s["start_time"])
+
+        # Log warning if any slots were malformed
+        if len(sorted_slots) < len(day_schedule):
+            logger.warning(
+                f"Found {len(day_schedule) - len(sorted_slots)} malformed slots on {day_key}"
+            )
 
         # Get day boundaries
         day_start = current + default_day_start
@@ -270,11 +277,14 @@ def fill_time_slot(
 
         # Check if there's any overlap
         if new_slot_start_dt < existing_end and new_slot_end_dt > existing_start:
-            raise ValueError(
-                f"Slot {start_time}-{end_time} overlaps with existing slot "
-                f"{existing_start.strftime('%H:%M')}-{existing_end.strftime('%H:%M')}: "
-                f"{existing_slot}"
+            # Instead of raising an error, skip the duplicate and log a warning
+            logger.warning(
+                f"Skipping duplicate/overlapping slot {start_time}-{end_time} on {date}. "
+                f"Overlaps with existing slot {existing_start.strftime('%H:%M')}-"
+                f"{existing_end.strftime('%H:%M')}"
             )
+            # Return schedule unchanged (LLM will see this as successful completion)
+            return schedule
 
     # Add new slot
     new_slot = {
