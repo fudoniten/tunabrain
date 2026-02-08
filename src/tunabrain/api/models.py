@@ -95,12 +95,22 @@ class DimensionSelection(BaseModel):
     )
 
 
+class CategoryValue(BaseModel):
+    """A single value within a categorization dimension with optional description."""
+
+    value: str = Field(..., description="The value identifier/name")
+    description: str | None = Field(
+        None, description="Optional description of what this value represents"
+    )
+
+
 class CategoryDefinition(BaseModel):
     """Definition of a categorization dimension provided by the caller."""
 
     description: str = Field(..., description="What the dimension represents")
-    values: list[str] = Field(
-        default_factory=list, description="Candidate values the model may choose from"
+    values: list[str] | list[CategoryValue] = Field(
+        default_factory=list,
+        description="Candidate values (as strings or CategoryValue objects with descriptions)",
     )
 
 

@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from tunabrain.api.models import (
     CategoryDefinition,
+    CategoryValue,
     Channel,
     ChannelMapping,
     DimensionSelection,
@@ -47,15 +48,34 @@ class SingleDimensionResult(BaseModel):
 
 def _fallback_dimension(name: str, definition: CategoryDefinition) -> DimensionSelection:
     """Return a fallback selection for a single category."""
+    normalized_values = _normalize_category_values(definition.values)
+    fallback_value = normalized_values[0][0] if normalized_values else ""
     return DimensionSelection(
         dimension=name,
-        values=[definition.values[0]] if definition.values else [],
+        values=[fallback_value] if fallback_value else [],
         notes=["Default selection used because structured LLM output was unavailable."],
     )
 
 
 def _fallback_dimensions(categories: dict[str, CategoryDefinition]) -> list[DimensionSelection]:
     return [_fallback_dimension(name, defn) for name, defn in categories.items()]
+
+
+def _normalize_category_values(
+    values: list[str] | list[CategoryValue],
+) -> list[tuple[str, str | None]]:
+    """Normalize category values to a list of (value, description) tuples."""
+    result = []
+    for v in values:
+        if isinstance(v, CategoryValue):
+            result.append((v.value, v.description))
+        elif isinstance(v, dict):
+            # Handle dict format from JSON deserialization
+            result.append((v.get("value", str(v)), v.get("description")))
+        else:
+            # Plain string value
+            result.append((str(v), None))
+    return result
 
 
 async def _categorize_single(
@@ -70,7 +90,18 @@ async def _categorize_single(
     """Send a single category to the LLM and return its dimension selection."""
     parser = PydanticOutputParser(pydantic_object=SingleDimensionResult)
 
-    value_block = "\n".join(f"  - {v}" for v in category_definition.values)
+    # Normalize values to handle both strings and CategoryValue objects
+    normalized_values = _normalize_category_values(category_definition.values)
+
+    # Build value block with descriptions when available
+    value_lines = []
+    for value, description in normalized_values:
+        if description:
+            value_lines.append(f"  - {value}: {description}")
+        else:
+            value_lines.append(f"  - {value}")
+    value_block = "\n".join(value_lines)
+
     formatted_category = f"- {category_name}: {category_definition.description}\n{value_block}"
 
     prompt = ChatPromptTemplate.from_messages(
@@ -252,4 +283,3 @@ async def categorize_media(
         len(result.channel_mappings),
     )
     return result
-
