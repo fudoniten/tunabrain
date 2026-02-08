@@ -78,10 +78,11 @@ async def _call_llm(
                 "system",
                 "You are a scheduling strategist selecting structured attributes for media. "
                 "Use the provided dimensions and value sets as anchors. Always include every "
-                "caller-provided dimension with 1-3 chosen values. If channels are supplied, "
-                "suggest the top 1-3 channels with brief reasons. You may propose up to two "
-                "additional scheduling dimensions only when they provide clear programming "
-                "value, with concise names and 1-3 reasonable values for each.",
+                "caller-provided dimension with 1-3 chosen values. Every dimension MUST have "
+                "at least one value. If channels are supplied, suggest the top 1-3 channels "
+                "with brief reasons. You may propose up to two additional scheduling dimensions "
+                "only when they provide clear programming value, with concise names and 1-3 "
+                "reasonable values for each.",
             ),
             (
                 "human",

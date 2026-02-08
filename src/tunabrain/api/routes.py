@@ -69,8 +69,8 @@ async def channel_mapping(request: ChannelMappingRequest) -> ChannelMappingRespo
 @router.post("/categorize", response_model=CategorizationResponse)
 async def categorize(request: CategorizationRequest) -> CategorizationResponse:
     logger.info(
-        "Processing categorization request with %s media items and %s categories",
-        len(request.media),
+        "Processing categorization request for media %s into %s categories",
+        request.media.title,
         len(request.categories),
     )
     categorization = await categorize_media(
