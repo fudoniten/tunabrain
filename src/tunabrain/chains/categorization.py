@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from langchain_core.exceptions import OutputParserException
@@ -36,53 +37,50 @@ class CategorizationResult(BaseModel):
     )
 
 
-def _format_value_sets(categories: dict[str, CategoryDefinition]) -> str:
-    if not categories:
-        return "No categories were provided."
+class SingleDimensionResult(BaseModel):
+    """Structured response for a single dimension categorization."""
 
-    lines: list[str] = []
-    for name, definition in categories.items():
-        value_block = "\n".join(f"  - {value}" for value in definition.values)
-        lines.append(f"- {name}: {definition.description}\n{value_block}")
-    return "\n".join(lines)
+    dimension: DimensionSelection = Field(
+        description="Selected values for the scheduling dimension",
+    )
+
+
+def _fallback_dimension(name: str, definition: CategoryDefinition) -> DimensionSelection:
+    """Return a fallback selection for a single category."""
+    return DimensionSelection(
+        dimension=name,
+        values=[definition.values[0]] if definition.values else [],
+        notes=["Default selection used because structured LLM output was unavailable."],
+    )
 
 
 def _fallback_dimensions(categories: dict[str, CategoryDefinition]) -> list[DimensionSelection]:
-    fallback: list[DimensionSelection] = []
-    for name, definition in categories.items():
-        fallback.append(
-            DimensionSelection(
-                dimension=name,
-                values=[definition.values[0]] if definition.values else [],
-                notes=[
-                    "Default selection used because structured LLM output was unavailable."
-                ],
-            )
-        )
-    return fallback
+    return [_fallback_dimension(name, defn) for name, defn in categories.items()]
 
 
-async def _call_llm(
+async def _categorize_single(
     *,
     llm: RunnableSerializable,
     media: MediaItem,
-    categories: dict[str, CategoryDefinition],
-    channels: list[Channel],
+    category_name: str,
+    category_definition: CategoryDefinition,
     wikipedia_summary: str,
-    parser: PydanticOutputParser,
     debug: bool,
-) -> CategorizationResult:
+) -> DimensionSelection:
+    """Send a single category to the LLM and return its dimension selection."""
+    parser = PydanticOutputParser(pydantic_object=SingleDimensionResult)
+
+    value_block = "\n".join(f"  - {v}" for v in category_definition.values)
+    formatted_category = f"- {category_name}: {category_definition.description}\n{value_block}"
+
     prompt = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
                 "You are a scheduling strategist selecting structured attributes for media. "
-                "Use the provided dimensions and value sets as anchors. Always include every "
-                "caller-provided dimension with 1-3 chosen values. Every dimension MUST have "
-                "at least one value. If channels are supplied, suggest the top 1-3 channels "
-                "with brief reasons. You may propose up to two additional scheduling dimensions "
-                "only when they provide clear programming value, with concise names and 1-3 "
-                "reasonable values for each.",
+                "You will be given exactly one scheduling dimension with its candidate values. "
+                "Choose 1-3 values from the candidates that best describe the media. "
+                "The dimension MUST have at least one value.",
             ),
             (
                 "human",
@@ -94,21 +92,11 @@ async def _call_llm(
                 "- Rating: {rating}\n"
                 "- Current tags: {current_tags}\n\n"
                 "Wikipedia summary: {wikipedia_summary}\n\n"
-                "Scheduling categories (always include them):\n{value_sets}\n\n"
-                "Available channels (optional):\n{channels}\n\n"
+                "Scheduling dimension to categorize:\n{category}\n\n"
                 "Return only the JSON dictated by the format instructions."
                 "{format_instructions}",
             ),
         ]
-    )
-
-    channel_block = (
-        "\n".join(
-            f"- {channel.name}: {channel.description or 'No description provided'}"
-            for channel in channels
-        )
-        if channels
-        else "None provided"
     )
 
     inputs = {
@@ -119,21 +107,65 @@ async def _call_llm(
         "rating": media.rating or "Unknown",
         "current_tags": ", ".join(media.current_tags) if media.current_tags else "None",
         "wikipedia_summary": wikipedia_summary,
-        "value_sets": _format_value_sets(categories),
-        "channels": channel_block,
+        "category": formatted_category,
         "format_instructions": f"\n\n{parser.get_format_instructions()}",
     }
 
     if debug:
-        logger.debug("LLM request (categorization): %s", inputs)
+        logger.debug("LLM request (categorization/%s): %s", category_name, inputs)
 
     messages = prompt.format_messages(**inputs)
     response = await llm.ainvoke(messages)
 
     if debug:
-        logger.debug("LLM raw response (categorization): %s", response)
+        logger.debug("LLM raw response (categorization/%s): %s", category_name, response)
 
-    return await parser.ainvoke(response)
+    result = await parser.ainvoke(response)
+    dim = result.dimension
+
+    # Ensure the dimension name matches the requested category.
+    dim.dimension = category_name
+
+    return dim
+
+
+async def _categorize_single_safe(
+    *,
+    llm: RunnableSerializable,
+    media: MediaItem,
+    category_name: str,
+    category_definition: CategoryDefinition,
+    wikipedia_summary: str,
+    debug: bool,
+) -> DimensionSelection:
+    """Wrapper around ``_categorize_single`` that returns a fallback on failure."""
+    try:
+        dim = await _categorize_single(
+            llm=llm,
+            media=media,
+            category_name=category_name,
+            category_definition=category_definition,
+            wikipedia_summary=wikipedia_summary,
+            debug=debug,
+        )
+        # Guarantee at least one value.
+        if not dim.values:
+            logger.warning(
+                "LLM returned empty values for dimension '%s', applying fallback",
+                category_name,
+            )
+            return _fallback_dimension(category_name, category_definition)
+        return dim
+    except OutputParserException as exc:
+        logger.error(
+            "Failed to parse categorization response for '%s'. llm_output=%s",
+            category_name,
+            getattr(exc, "llm_output", "<missing>"),
+        )
+        return _fallback_dimension(category_name, category_definition)
+    except Exception as exc:  # pragma: no cover - defensive catch for external service
+        logger.warning("LLM categorization failed for '%s': %s", category_name, exc)
+        return _fallback_dimension(category_name, category_definition)
 
 
 async def categorize_media(
@@ -146,13 +178,13 @@ async def categorize_media(
 ) -> CategorizationResult:
     """Categorize media across caller-provided scheduling dimensions.
 
-    Categories and their allowable values are supplied by the caller. The media metadata
-    is enriched with a Wikipedia summary when possible. If channels are provided, the LLM
-    will also suggest channel mappings. Fallbacks are provided when parsing fails.
+    Each category is sent as an individual LLM request so that every dimension
+    is guaranteed to receive at least one value.  Requests are dispatched
+    concurrently.  If channels are provided, channel mapping is handled via a
+    dedicated chain after all dimensions are resolved.
     """
 
     debug_enabled = is_debug_enabled(debug)
-    parser = PydanticOutputParser(pydantic_object=CategorizationResult)
     llm_instance = llm or get_chat_model()
     channels_list = channels or []
 
@@ -163,6 +195,7 @@ async def categorize_media(
         len(channels_list),
     )
 
+    # --- Wikipedia enrichment (shared across all category requests) ---
     wikipedia = WikipediaLookup(debug=debug_enabled, llm=llm_instance)
     wikipedia_summary = "Wikipedia summary not available."
     try:
@@ -177,42 +210,40 @@ async def categorize_media(
     except Exception as exc:  # pragma: no cover - defensive catch for external service
         logger.warning("Wikipedia lookup failed: %s", exc)
 
-    try:
-        result = await _call_llm(
-            llm=llm_instance,
-            media=media,
-            categories=categories,
-            channels=channels_list,
-            wikipedia_summary=wikipedia_summary,
-            parser=parser,
-            debug=debug_enabled,
+    # --- Per-category LLM calls (concurrent) ---
+    if categories:
+        dimensions = list(
+            await asyncio.gather(
+                *(
+                    _categorize_single_safe(
+                        llm=llm_instance,
+                        media=media,
+                        category_name=name,
+                        category_definition=defn,
+                        wikipedia_summary=wikipedia_summary,
+                        debug=debug_enabled,
+                    )
+                    for name, defn in categories.items()
+                )
+            )
         )
-    except OutputParserException as exc:
-        logger.error(
-            "Failed to parse categorization response. llm_output=%s",
-            getattr(exc, "llm_output", "<missing>"),
-        )
-        result = CategorizationResult(
-            dimensions=_fallback_dimensions(categories),
-            channel_mappings=[],
-        )
-    except Exception as exc:  # pragma: no cover - defensive catch for external service
-        logger.warning("LLM categorization failed: %s", exc)
-        result = CategorizationResult(
-            dimensions=_fallback_dimensions(categories),
-            channel_mappings=[],
-        )
+    else:
+        dimensions = []
 
-    if channels_list and not result.channel_mappings:
-        result.channel_mappings = await map_media_to_channels(
+    # --- Channel mapping (separate chain) ---
+    channel_mappings: list[ChannelMapping] = []
+    if channels_list:
+        channel_mappings = await map_media_to_channels(
             media,
             channels_list,
             debug=debug_enabled,
             llm=llm_instance,
         )
 
-    if not result.dimensions:
-        result.dimensions = _fallback_dimensions(categories)
+    result = CategorizationResult(
+        dimensions=dimensions,
+        channel_mappings=channel_mappings,
+    )
 
     logger.info(
         "Categorization complete for '%s' with %s dimensions and %s channel mappings",
