@@ -138,33 +138,84 @@ async def generate_tags(
 
     vetted_existing_tags = await evaluate_tag_batches(existing_tags or [])
 
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                "You are a scheduling assistant that assigns concise, reusable tags to media. " +
-                "Prefer tags from the vetted existing list to avoid synonyms. " +
-                "Keep 5-15 tags that describe genre, tone, audience, and programming value. " +
-                "Remove tags that are irrelevant to scheduling or inaccurate.",
-            ),
-            MessagesPlaceholder(variable_name="chat_history", optional=True),
-            (
-                "human",
-                "Media metadata for tagging:\n" +
-                "- Title: {title}\n" +
-                "- Description: {description}\n" +
-                "- Genres: {genres}\n" +
-                "- Runtime (minutes): {duration}\n" +
-                "- Rating: {rating}\n" +
-                "- Current tags (review for removal): {current_tags}\n" +
-                "- Vetted existing tags to reuse: {existing_tags}\n\n" +
-                "Wikipedia summary: {wikipedia_summary}\n\n" +
-                "Use the Wikipedia synopsis to ensure accuracy." +
-                " Return only the JSON dictated by the format instructions." +
-                "{format_instructions}",
-            ),
-        ]
+    _EPISODE_VOCAB = (
+        ":christmas, :halloween, :holiday, :finale, :premiere, :pilot, "
+        ":musical, :crossover, :bottle-episode, :clip-show, :flashback, "
+        ":anniversary, :standalone, :two-parter, :special"
     )
+
+    if media.is_episode:
+        episode_label = ""
+        if media.season_number is not None and media.episode_number is not None:
+            episode_label = f"Season {media.season_number}, Episode {media.episode_number}"
+        elif media.season_number is not None:
+            episode_label = f"Season {media.season_number}"
+        elif media.episode_number is not None:
+            episode_label = f"Episode {media.episode_number}"
+        else:
+            episode_label = "Unknown position"
+
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "You are a scheduling assistant tagging a specific TV episode. "
+                    "The series already has genre and tone tags; do NOT re-derive series-level "
+                    "tags like the show's genre or overall audience. "
+                    "Instead, focus on what makes THIS episode distinctive within the series: "
+                    "special themes, unusual format, narrative significance, or seasonal hooks "
+                    "that a scheduler would use to choose this episode over others. "
+                    "Prefer tags from the vetted existing list to avoid synonyms. "
+                    "Keep 3-10 tags. Prioritise episode-specific vocabulary where applicable: "
+                    f"{_EPISODE_VOCAB}. "
+                    "Remove tags that are inaccurate or not useful for scheduling decisions.",
+                ),
+                MessagesPlaceholder(variable_name="chat_history", optional=True),
+                (
+                    "human",
+                    "Episode metadata for tagging:\n"
+                    "- Title: {title}\n"
+                    "- Position: {episode_label}\n"
+                    "- Description: {description}\n"
+                    "- Runtime (minutes): {duration}\n"
+                    "- Rating: {rating}\n"
+                    "- Current tags (review for removal): {current_tags}\n"
+                    "- Vetted existing tags to reuse: {existing_tags}\n\n"
+                    "Wikipedia summary: {wikipedia_summary}\n\n"
+                    "Use the Wikipedia synopsis to confirm episode-specific details. "
+                    "Return only the JSON dictated by the format instructions."
+                    "{format_instructions}",
+                ),
+            ]
+        )
+    else:
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "You are a scheduling assistant that assigns concise, reusable tags to media. "
+                    "Prefer tags from the vetted existing list to avoid synonyms. "
+                    "Keep 5-15 tags that describe genre, tone, audience, and programming value. "
+                    "Remove tags that are irrelevant to scheduling or inaccurate.",
+                ),
+                MessagesPlaceholder(variable_name="chat_history", optional=True),
+                (
+                    "human",
+                    "Media metadata for tagging:\n"
+                    "- Title: {title}\n"
+                    "- Description: {description}\n"
+                    "- Genres: {genres}\n"
+                    "- Runtime (minutes): {duration}\n"
+                    "- Rating: {rating}\n"
+                    "- Current tags (review for removal): {current_tags}\n"
+                    "- Vetted existing tags to reuse: {existing_tags}\n\n"
+                    "Wikipedia summary: {wikipedia_summary}\n\n"
+                    "Use the Wikipedia synopsis to ensure accuracy."
+                    " Return only the JSON dictated by the format instructions."
+                    "{format_instructions}",
+                ),
+            ]
+        )
 
     final_inputs = {
         "title": media.title,
@@ -177,6 +228,8 @@ async def generate_tags(
         "wikipedia_summary": wikipedia_context,
         "format_instructions": f"\n\n{parser.get_format_instructions()}",
     }
+    if media.is_episode:
+        final_inputs["episode_label"] = episode_label
     if debug_enabled:
         logger.debug("LLM request (final tags): %s", final_inputs)
     try:
