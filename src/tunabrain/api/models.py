@@ -24,6 +24,14 @@ class MediaItem(BaseModel):
         default_factory=list,
         description="Existing tags already assigned to the media that should be reviewed",
     )
+    is_episode: bool = Field(
+        False, description="True when this item is a TV episode rather than a standalone film"
+    )
+    season_number: int | None = Field(None, description="Season number for TV episodes")
+    episode_number: int | None = Field(None, description="Episode number within the season")
+    parent_id: str | None = Field(
+        None, description="ID of the parent series when this item is a TV episode"
+    )
 
 
 class Channel(BaseModel):
