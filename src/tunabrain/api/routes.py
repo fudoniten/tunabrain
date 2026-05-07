@@ -27,6 +27,7 @@ from tunabrain.chains.scheduling import build_schedule
 from tunabrain.chains.tag_governance import audit_tags, triage_tags
 from tunabrain.chains.tagging import generate_tags
 from tunabrain.config import is_debug_enabled
+from tunabrain.version import get_git_info
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -36,6 +37,13 @@ logger = logging.getLogger(__name__)
 async def health() -> dict[str, str]:
     logger.info("Health check requested")
     return {"status": "ok"}
+
+
+@router.get("/api/version")
+async def get_version() -> dict[str, str | None]:
+    """Get version information including git commit and timestamp."""
+    logger.debug("Version info requested")
+    return get_git_info()
 
 
 @router.post("/tags", response_model=TaggingResponse)
