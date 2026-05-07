@@ -70,7 +70,7 @@ Allowed flags: {allowed_flags}
 Episode Title: {episode_title}
 Parent Show: {parent_title}
 Season: {season}
-Episode: {episode_number}
+Episode Number: {episode_number}
 Description: {description}
 Existing Tags: {existing_tags}
 
@@ -92,7 +92,7 @@ Return a JSON object with:
             "episode_title": media.title,
             "parent_title": parent_title or "Unknown",
             "season": media.season_number or "Unknown",
-            "episode": media.episode_number or "Unknown",
+            "episode_number": media.episode_number or "Unknown",
             "description": media.description or "No description available",
             "existing_tags": ", ".join(existing_flags) if existing_flags else "None",
         })
