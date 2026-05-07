@@ -13,8 +13,11 @@
   outputs = { self, nixpkgs, flake-utils, nix-helpers, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
+
         pkgs = import nixpkgs { inherit system; };
+
         helpers = nix-helpers.packages."${system}";
+
         pythonEnv = pkgs.python311.withPackages (ps: [
           ps.fastapi
           ps.uvicorn
@@ -26,6 +29,7 @@
           ps.langgraph
           ps.httpx
         ]);
+
         tunabrainServer = pkgs.writeShellApplication {
           name = "tunabrain-server";
           runtimeInputs = [ pythonEnv pkgs.python311 ];
@@ -34,6 +38,24 @@
             exec python -m tunabrain "$@"
           '';
         };
+
+        # Version information (git commit + timestamp)
+        versionInfo = let
+          gitCommit = self.rev or self.dirtyRev or "unknown";
+          gitTimestamp = if self ? lastModified then
+          # Format: YYYYMMDD-HHMMSS
+            let
+              ts = toString self.lastModified;
+              # lastModified is Unix epoch, convert to readable format
+              year = builtins.substring 0 4 ts;
+              month = builtins.substring 4 2 ts;
+              day = builtins.substring 6 2 ts;
+            in "${year}${month}${day}"
+          else
+            "dev";
+          versionTag = "${builtins.substring 0 7 gitCommit}-${gitTimestamp}";
+        in { inherit gitCommit gitTimestamp versionTag; };
+
       in {
         packages = rec {
           default = tunabrain;
@@ -42,9 +64,14 @@
           in helpers.deployContainers {
             name = "tunabrain";
             repo = "registry.kube.sea.fudo.link";
-            tags = [ "latest" ];
+            tags = [ "latest" versionInfo.versionTag ];
             entrypoint = [ "${tunabrain}/bin/tunabrain-server" ];
             verbose = true;
+            env = {
+              GIT_COMMIT = versionInfo.gitCommit;
+              GIT_TIMESTAMP = versionInfo.gitTimestamp;
+              VERSION = versionInfo.versionTag;
+            };
           };
         };
 
