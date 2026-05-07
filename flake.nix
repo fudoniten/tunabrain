@@ -22,6 +22,8 @@
           ps.langchain
           ps.langchain-core
           ps.langchain-openai
+          ps.langchain-ollama
+          ps.langgraph
           ps.httpx
         ]);
         tunabrainServer = pkgs.writeShellApplication {
