@@ -361,3 +361,51 @@ class TagAuditResponse(BaseModel):
         default_factory=list,
         description="Tags that should be deleted because they're not useful for scheduling",
     )
+
+class EpisodeSpecialFlagRequest(BaseModel):
+    """Request to generate constrained special flags for an episode."""
+    
+    media: MediaItem = Field(..., description="Episode metadata")
+    parent_title: str | None = Field(
+        None,
+        description="Title of the parent show for context"
+    )
+    existing_flags: list[str] = Field(
+        default_factory=list,
+        description="Existing flags to preserve when generating new ones"
+    )
+    debug: bool = Field(
+        False,
+        description="Enable debug logging for outgoing LLM calls"
+    )
+
+
+class EpisodeSpecialFlagResponse(BaseModel):
+    """Response with constrained special flags for an episode."""
+    
+    flags: list[str] = Field(
+        description="List of special flags (constrained vocabulary)"
+    )
+
+
+# Constrained vocabulary for episode special flags
+EPISODE_SPECIAL_FLAGS = {
+    "christmas",
+    "halloween", 
+    "crossover",
+    "series-finale",
+    "musical",
+    "special-event",
+    "clip-show",
+    "flashback",
+    "dream-sequence",
+    "bottle-episode",
+    "clip-compilation",
+    "season-premiere",
+    "season-finale",
+    "two-part",
+    "movie-special",
+    "guest-star",
+    "live-action",
+    "animation",
+}

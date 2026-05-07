@@ -19,6 +19,8 @@ from tunabrain.api.models import (
     TaggingResponse,
     TagTriageRequest,
     TagTriageResponse,
+    EpisodeSpecialFlagRequest,
+    EpisodeSpecialFlagResponse,
 )
 from tunabrain.chains.bumpers import generate_bumpers
 from tunabrain.chains.categorization import categorize_media
@@ -26,6 +28,7 @@ from tunabrain.chains.channel_mapping import map_media_to_channels
 from tunabrain.chains.scheduling import build_schedule
 from tunabrain.chains.tag_governance import audit_tags, triage_tags
 from tunabrain.chains.tagging import generate_tags
+from tunabrain.chains.episode_flagging import generate_episode_flags
 from tunabrain.config import is_debug_enabled
 from tunabrain.version import get_git_info
 
@@ -158,3 +161,30 @@ async def audit_tag_usefulness(request: TagAuditRequest) -> TagAuditResponse:
         len(request.tags),
     )
     return TagAuditResponse(tags_to_delete=tags_to_delete)
+
+
+@router.post("/tags/episode-special-flag", response_model=EpisodeSpecialFlagResponse)
+async def flag_episode_special(request: EpisodeSpecialFlagRequest) -> EpisodeSpecialFlagResponse:
+    """Generate constrained special flags for an episode.
+    
+    Uses a lightweight LLM to identify special episode characteristics
+    from a fixed vocabulary (christmas, crossover, musical, season-finale, etc.).
+    
+    This endpoint is designed for efficient bulk processing of episodes with
+    cost-effective, lightweight models. Only use on episodes, not full show tagging.
+    
+    Args:
+        request: Episode metadata and context
+    
+    Returns:
+        Special flags for the episode
+    """
+    
+    flags = await generate_episode_flags(
+        media=request.media,
+        parent_title=request.parent_title,
+        existing_flags=request.existing_flags,
+        debug=request.debug,
+    )
+    
+    return EpisodeSpecialFlagResponse(flags=flags)
