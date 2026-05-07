@@ -26,18 +26,29 @@ class TaggingResult(BaseModel):
 
 
 async def generate_tags(
-    media: MediaItem, existing_tags: list[str] | None = None, *, debug: bool = False
+    media: MediaItem, existing_tags: list[str] | None = None, *, debug: bool = False, task=None
 ) -> list[str]:
     """Generate scheduling-friendly tags for the provided media item.
 
     This function should orchestrate LangChain components to build a set of
     concise tags that help place the media into thematic schedules.
+    
+    Args:
+        media: The media item to tag
+        existing_tags: Existing tags to reuse when available
+        debug: Enable debug logging
+        task: LLMTask enum for task-specific model selection (default: inferred from media.is_episode)
     """
 
-    logger.info("Generating tags for '%s'", media.title)
+    # Infer task from media type if not specified
+    if task is None:
+        from tunabrain.llm import LLMTask
+        task = LLMTask.EPISODE_FLAGGING if media.is_episode else LLMTask.SHOW_TAGGING
+    
+    logger.info("Generating tags for '%s' (task=%s)", media.title, task.value if hasattr(task, 'value') else task)
     debug_enabled = is_debug_enabled(debug)
 
-    llm = get_chat_model()
+    llm = get_chat_model(task=task)  # Use task-specific model
     wikipedia = WikipediaLookup(debug=debug_enabled, llm=llm)
     wikipedia_summary: str | None = None
     try:

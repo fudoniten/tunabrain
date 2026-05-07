@@ -25,6 +25,11 @@ class Settings:
     openai_api_key: str | None
     openrouter_api_key: str | None
     debug_enabled: bool
+    
+    # Task-specific model overrides (optional; fall back to llm_model if not set)
+    show_llm_model: str | None = None        # Full tagging for shows
+    episode_llm_model: str | None = None     # Lightweight episode special flags
+    schedule_llm_model: str | None = None    # Schedule building
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -47,11 +52,17 @@ def get_settings() -> Settings:
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
         debug_enabled=_env_flag("TUNABRAIN_DEBUG", False),
+        show_llm_model=os.getenv("TUNABRAIN_SHOW_LLM_MODEL"),
+        episode_llm_model=os.getenv("TUNABRAIN_EPISODE_LLM_MODEL"),
+        schedule_llm_model=os.getenv("TUNABRAIN_SCHEDULE_LLM_MODEL"),
     )
     logger.info(
-        "Loaded settings: provider=%s model=%s debug=%s", 
+        "Loaded settings: provider=%s model=%s (shows=%s episodes=%s schedule=%s) debug=%s", 
         settings.llm_provider,
         settings.llm_model,
+        settings.show_llm_model or "default",
+        settings.episode_llm_model or "default",
+        settings.schedule_llm_model or "default",
         settings.debug_enabled,
     )
     return settings
