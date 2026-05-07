@@ -6,11 +6,14 @@ import logging
 from enum import Enum
 
 from langchain.chat_models import init_chat_model
+from langchain_openai import ChatOpenAI
 
 from tunabrain.config import get_settings
 
 
 logger = logging.getLogger(__name__)
+
+_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 
 class LLMTask(Enum):
@@ -56,6 +59,18 @@ def get_chat_model(task: LLMTask = LLMTask.DEFAULT):
         "Initializing chat model for task=%s: provider=%s model=%s",
         task.value, settings.llm_provider, model_to_use
     )
+
+    if settings.llm_provider == "openrouter":
+        return ChatOpenAI(
+            model=settings.llm_model,
+            api_key=settings.openrouter_api_key,
+            base_url=_OPENROUTER_BASE_URL,
+        )
+
+    init_kwargs = {}
+    if settings.llm_provider == "openai" and settings.openai_api_key:
+        init_kwargs["api_key"] = settings.openai_api_key
+
     return init_chat_model(
         model=model_to_use,
         model_provider=settings.llm_provider,

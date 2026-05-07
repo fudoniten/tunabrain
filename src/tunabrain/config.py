@@ -23,6 +23,7 @@ class Settings:
     llm_provider: str
     llm_model: str
     openai_api_key: str | None
+    openrouter_api_key: str | None
     debug_enabled: bool
     
     # Task-specific model overrides (optional; fall back to llm_model if not set)
@@ -49,6 +50,7 @@ def get_settings() -> Settings:
         llm_provider=os.getenv("TUNABRAIN_LLM_PROVIDER", "openai"),
         llm_model=os.getenv("TUNABRAIN_LLM_MODEL", "gpt-4o-mini"),
         openai_api_key=os.getenv("OPENAI_API_KEY"),
+        openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
         debug_enabled=_env_flag("TUNABRAIN_DEBUG", False),
         show_llm_model=os.getenv("TUNABRAIN_SHOW_LLM_MODEL"),
         episode_llm_model=os.getenv("TUNABRAIN_EPISODE_LLM_MODEL"),
