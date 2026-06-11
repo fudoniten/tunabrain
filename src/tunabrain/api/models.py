@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class MediaItem(BaseModel):
@@ -32,6 +32,15 @@ class MediaItem(BaseModel):
     parent_id: str | None = Field(
         None, description="ID of the parent series when this item is a TV episode"
     )
+
+    @field_validator("genres", "current_tags", mode="before")
+    @classmethod
+    def _drop_null_entries(cls, value: object) -> object:
+        # Upstream metadata sources sometimes include null/blank entries
+        # (e.g. genres: [null]); drop them rather than rejecting the request.
+        if isinstance(value, list):
+            return [item for item in value if item is not None and str(item).strip()]
+        return value
 
 
 class Channel(BaseModel):
