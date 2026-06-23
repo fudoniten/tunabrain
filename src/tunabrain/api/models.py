@@ -409,3 +409,141 @@ EPISODE_SPECIAL_FLAGS = {
     "live-action",
     "animation",
 }
+
+
+# ============================================================================
+# Quarterly Strategy Models
+# ============================================================================
+
+
+class CostEstimate(BaseModel):
+    """Cost tracking for an operation."""
+    
+    estimated_cost_usd: float = Field(..., description="Estimated cost in USD")
+    llm_calls_used: int = Field(..., description="Number of LLM calls made")
+    estimated_tokens: str = Field(..., description="Token estimate (e.g., '~2,800')")
+    provider: str = Field(default="openrouter", description="LLM provider name")
+    model: str | None = Field(None, description="Model name used")
+
+
+class ChannelContext(BaseModel):
+    """Channel context for scheduling."""
+    
+    name: str = Field(..., description="Channel name")
+    description: str = Field(..., description="Channel description/purpose")
+
+
+class MediaCandidateSummary(BaseModel):
+    """Summary of available media (avoids listing all items)."""
+    
+    available_count: int = Field(..., description="Total available episodes/movies")
+    summary: str = Field(..., description="Breakdown by genre/type")
+    preview_sample: list[MediaItem] = Field(
+        default_factory=list,
+        description="5-10 representative items for LLM context"
+    )
+    tag_availability: dict[str, int] = Field(
+        default_factory=dict,
+        description="Approximate counts by tag"
+    )
+
+
+class ChannelStrategyAdjustment(BaseModel):
+    """Programming guidance for one channel."""
+    
+    channel: str = Field(..., description="Channel name")
+    theme: str = Field(..., description="Channel's programming focus (1-2 sentences)")
+    rationale: str = Field(..., description="Why this theme fits this channel")
+    recommended_mix: dict[str, str] = Field(
+        default_factory=dict,
+        description="Content distribution (e.g., 40% drama, 30% comedy)"
+    )
+    special_focus: list[str] = Field(
+        default_factory=list,
+        description="Areas of emphasis"
+    )
+
+
+class SpecialEvent(BaseModel):
+    """Calendar event impacting programming."""
+    
+    date: str = Field(..., description="Date or date range")
+    event_name: str = Field(..., description="Event name")
+    recommendation: str = Field(..., description="How to schedule around this")
+
+
+class QuarterlyStrategy(BaseModel):
+    """High-level quarterly programming strategy."""
+    
+    quarter: str = Field(..., description="Quarter identifier")
+    overall_theme: str = Field(..., description="Main seasonal theme")
+    reasoning: str = Field(..., description="Why this theme")
+    key_decisions: list[str] = Field(
+        default_factory=list,
+        description="5-10 strategic decisions"
+    )
+    channel_strategies: list[ChannelStrategyAdjustment] = Field(
+        ...,
+        description="Per-channel strategy"
+    )
+    special_events: list[SpecialEvent] = Field(
+        default_factory=list,
+        description="Calendar events"
+    )
+    implied_monthly_themes: dict[str, str] = Field(
+        default_factory=dict,
+        description="Suggested monthly sub-themes"
+    )
+
+
+class QuarterlyStrategyRequest(BaseModel):
+    """Request to generate quarterly strategy."""
+    
+    quarter: Literal["Q1", "Q2", "Q3", "Q4"] = Field(
+        ...,
+        description="Quarter"
+    )
+    year: int = Field(
+        ...,
+        ge=2024,
+        le=2030,
+        description="Year"
+    )
+    channels: list[ChannelContext] = Field(
+        ...,
+        description="Channels to schedule"
+    )
+    media_candidates: MediaCandidateSummary = Field(
+        ...,
+        description="Available media"
+    )
+    strategic_guidance: str | None = Field(
+        None,
+        description="Optional strategic direction"
+    )
+    cost_tier: Literal["economy", "balanced", "premium"] = Field(
+        "balanced",
+        description="Cost vs quality"
+    )
+
+
+class QuarterlyStrategyResponse(BaseModel):
+    """Response from quarterly strategy generation."""
+    
+    strategy_id: str = Field(..., description="Unique ID for auditing")
+    status: Literal["success", "partial", "error"] = Field(...)
+    strategy: QuarterlyStrategy = Field(..., description="The strategy")
+    cost_estimate: CostEstimate = Field(..., description="Cost estimate")
+    suggested_next_steps: list[str] = Field(
+        default_factory=list,
+        description="Recommended next actions"
+    )
+
+
+class ErrorResponse(BaseModel):
+    """Structured error response."""
+    
+    error: str = Field(..., description="Error code")
+    message: str = Field(..., description="Human-readable message")
+    details: dict | None = Field(None, description="Additional context")
+    suggested_action: str | None = Field(None, description="What to do")
