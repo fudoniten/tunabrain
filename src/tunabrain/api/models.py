@@ -540,6 +540,7 @@ class QuarterlyStrategyResponse(BaseModel):
     )
 
 
+
 class ErrorResponse(BaseModel):
     """Structured error response."""
     
@@ -547,3 +548,124 @@ class ErrorResponse(BaseModel):
     message: str = Field(..., description="Human-readable message")
     details: dict | None = Field(None, description="Additional context")
     suggested_action: str | None = Field(None, description="What to do")
+
+
+# ============================================================================
+# Monthly Strategy Models (Phase 2)
+# ============================================================================
+
+
+class TimeBlockRecommendation(BaseModel):
+    """Recommended content for a time block."""
+    
+    time_block: Literal["early_morning", "morning", "afternoon", "prime", "late_night"] = Field(
+        ..., description="Time block identifier"
+    )
+    time_range: str = Field(..., description="e.g., '06:00-09:00' or 'Mon-Fri 09:00-12:00'")
+    recommended_content: str = Field(..., description="Type of content for this block")
+    content_mix: dict[str, str] = Field(
+        default_factory=dict,
+        description="Genre/type breakdown (e.g., 60% comedy, 40% sitcom)"
+    )
+    rationale: str = Field(..., description="Why this mix works for this time block")
+
+
+class MonthlyTheme(BaseModel):
+    """Monthly programming strategy."""
+    
+    month: str = Field(..., description="Month identifier (YYYY-MM)")
+    theme_name: str = Field(..., description="1-2 sentence theme name")
+    theme_description: str = Field(..., description="3-5 sentences detailed description")
+    key_focus_areas: list[str] = Field(
+        default_factory=list,
+        description="3-5 strategic focus areas for the month"
+    )
+    time_block_recommendations: list[TimeBlockRecommendation] = Field(
+        default_factory=list,
+        description="Content recommendations per time block"
+    )
+    opening_tagline: str = Field(..., description="Short promotional tagline for the month")
+    special_notes: str = Field(
+        default="",
+        description="Any special considerations or events impacting programming"
+    )
+
+
+class MonthlyStrategyRequest(BaseModel):
+    """Request to generate monthly strategy."""
+    
+    month: str = Field(
+        ...,
+        description="Month identifier (YYYY-MM format, e.g., '2026-10')"
+    )
+    channels: list[ChannelContext] = Field(
+        ...,
+        description="Channels to schedule (copied from quarterly if available)"
+    )
+    quarterly_context: QuarterlyStrategy | None = Field(
+        None,
+        description="Optional quarterly strategy for context (used to derive focus)"
+    )
+    media_candidates: MediaCandidateSummary = Field(
+        ...,
+        description="Available media for this month"
+    )
+    strategic_guidance: str | None = Field(
+        None,
+        description="Month-specific strategic direction"
+    )
+    max_iterations: int = Field(
+        8,
+        ge=3,
+        le=15,
+        description="Max agent iterations (default 8 for convergence)"
+    )
+    cost_tier: Literal["economy", "balanced", "premium"] = Field(
+        "balanced",
+        description="Cost vs quality"
+    )
+
+
+class MonthlyStrategyAgentIteration(BaseModel):
+    """Record of a single agent iteration."""
+    
+    iteration_number: int = Field(..., description="1-indexed iteration number")
+    strategy: MonthlyTheme = Field(..., description="Strategy at this iteration")
+    validation_score: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Validation score (0.0-1.0, higher is better)"
+    )
+    feedback: str = Field(
+        default="",
+        description="LLM feedback on what to refine in next iteration"
+    )
+    is_converged: bool = Field(
+        False,
+        description="True if strategy meets convergence threshold"
+    )
+
+
+class MonthlyStrategyResponse(BaseModel):
+    """Response from monthly strategy generation."""
+    
+    strategy_id: str = Field(..., description="Unique ID for auditing")
+    status: Literal["success", "partial", "error"] = Field(...)
+    strategy: MonthlyTheme = Field(..., description="Final converged monthly strategy")
+    iteration_count: int = Field(..., description="Total iterations to converge")
+    convergence_score: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Final validation score"
+    )
+    iterations_history: list[MonthlyStrategyAgentIteration] = Field(
+        default_factory=list,
+        description="Full history of all iterations (for debugging)"
+    )
+    cost_estimate: CostEstimate = Field(..., description="Cost for all LLM calls")
+    suggested_next_steps: list[str] = Field(
+        default_factory=list,
+        description="Recommended next actions"
+    )

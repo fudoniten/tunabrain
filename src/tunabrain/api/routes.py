@@ -24,6 +24,8 @@ from tunabrain.api.models import (
     EpisodeSpecialFlagResponse,
     QuarterlyStrategyRequest,
     QuarterlyStrategyResponse,
+    MonthlyStrategyRequest,
+    MonthlyStrategyResponse,
     ErrorResponse,
 )
 from tunabrain.chains.bumpers import generate_bumpers
@@ -34,6 +36,7 @@ from tunabrain.chains.tag_governance import audit_tags, triage_tags
 from tunabrain.chains.tagging import generate_tags
 from tunabrain.chains.episode_flagging import generate_episode_flags
 from tunabrain.scheduling.quarterly_strategy import generate_quarterly_strategy
+from tunabrain.scheduling.monthly_strategy import generate_monthly_strategy_agent_loop
 from tunabrain.scheduling.cost import calculate_cost
 from tunabrain.config import is_debug_enabled
 from tunabrain.version import get_git_info
@@ -265,4 +268,82 @@ async def get_quarterly_strategy(request: QuarterlyStrategyRequest) -> Quarterly
         raise
     except Exception as e:
         logger.error(f"Unexpected error generating quarterly strategy: {e}")
+        raise
+
+
+@router.post("/api/scheduling/get-monthly-strategy", response_model=MonthlyStrategyResponse)
+async def get_monthly_strategy(request: MonthlyStrategyRequest) -> MonthlyStrategyResponse:
+    """Generate a monthly programming strategy using iterative agent refinement.
+    
+    This endpoint uses a multi-step agent loop (5-8 iterations) to converge on
+    optimal monthly themes, time-block recommendations, and content mix.
+    
+    Args:
+        request: MonthlyStrategyRequest with month, channels, media, optional quarterly context
+    
+    Returns:
+        MonthlyStrategyResponse with final strategy, iteration history, and cost estimate
+    
+    HTTP Responses:
+        200: Strategy generated and converged successfully
+        400: Invalid request (bad month format, missing channels, etc.)
+        500: LLM invocation failed or response invalid
+    """
+    
+    logger.info(
+        f"Generating monthly strategy for {request.month} "
+        f"({len(request.channels)} channels, {request.media_candidates.available_count} media items, "
+        f"max_iterations={request.max_iterations})"
+    )
+    
+    try:
+        # Run agent loop
+        final_strategy, iterations_history, iteration_count, final_score = (
+            await generate_monthly_strategy_agent_loop(request)
+        )
+        logger.info(
+            f"Strategy converged in {iteration_count} iterations "
+            f"with score {final_score:.2f}"
+        )
+        
+        # Calculate cost (multi-LLM because of iterations)
+        cost_usd = calculate_cost(
+            model="gpt-4o-mini",
+            prompt_tokens=2000 * iteration_count,  # Approx tokens per iteration
+            completion_tokens=1500 * iteration_count
+        )
+        
+        # Generate strategy ID
+        strategy_id = f"monthly-{request.month.replace('-', '')}-{uuid.uuid4().hex[:8]}"
+        
+        return MonthlyStrategyResponse(
+            strategy_id=strategy_id,
+            status="success",
+            strategy=final_strategy,
+            iteration_count=iteration_count,
+            convergence_score=final_score,
+            iterations_history=iterations_history,
+            cost_estimate={
+                "estimated_cost_usd": cost_usd,
+                "llm_calls_used": iteration_count,
+                "estimated_tokens": f"~{3500 * iteration_count}",
+                "provider": "openrouter",
+                "model": "gpt-4o-mini"
+            },
+            suggested_next_steps=[
+                f"Review monthly strategy with content team",
+                f"Generate weekly schedules for {request.month}",
+                f"Allocate media to time blocks per recommendations",
+                f"Coordinate with marketing on opening tagline: '{final_strategy.opening_tagline}'"
+            ]
+        )
+    
+    except ValueError as e:
+        logger.error(f"Strategy generation validation error: {e}")
+        raise
+    except RuntimeError as e:
+        logger.error(f"Strategy generation runtime error: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error generating monthly strategy: {e}")
         raise
