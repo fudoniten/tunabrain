@@ -26,6 +26,10 @@ from tunabrain.api.models import (
     QuarterlyStrategyResponse,
     MonthlyStrategyRequest,
     MonthlyStrategyResponse,
+    QuarterlyGridRequest,
+    QuarterlyGridResponse,
+    QuarterlyGridRepairRequest,
+    QuarterlyGridRepairResponse,
     ErrorResponse,
 )
 from tunabrain.chains.bumpers import generate_bumpers
@@ -37,6 +41,10 @@ from tunabrain.chains.tagging import generate_tags
 from tunabrain.chains.episode_flagging import generate_episode_flags
 from tunabrain.scheduling.quarterly_strategy import generate_quarterly_strategy
 from tunabrain.scheduling.monthly_strategy import generate_monthly_strategy_agent_loop
+from tunabrain.scheduling.quarterly_grid import (
+    propose_quarterly_grid,
+    repair_quarterly_grid,
+)
 from tunabrain.scheduling.cost import calculate_cost
 from tunabrain.config import is_debug_enabled
 from tunabrain.version import get_git_info
@@ -347,3 +355,102 @@ async def get_monthly_strategy(request: MonthlyStrategyRequest) -> MonthlyStrate
     except Exception as e:
         logger.error(f"Unexpected error generating monthly strategy: {e}")
         raise
+
+
+@router.post("/api/scheduling/propose-quarterly-grid", response_model=QuarterlyGridResponse)
+async def propose_grid(request: QuarterlyGridRequest) -> QuarterlyGridResponse:
+    """Propose one channel's frozen quarterly grid (Phase 4).
+
+    Runs two internal passes - dayparting skeleton, then strip-fill per daypart -
+    against the supplied catalog profile. Per-channel by design: Tunarr Scheduler
+    loops channels and calls this once each. The grid is a set of recurring rules;
+    monthly overrides and weekly expansion happen downstream.
+
+    HTTP Responses:
+        200: Grid proposed successfully
+        400: Invalid request
+        500: LLM invocation failed or response invalid
+    """
+    logger.info(
+        "Proposing quarterly grid for channel='%s' Q%s %s (%s shows in profile)",
+        request.channel.name,
+        request.quarter[1],
+        request.year,
+        len(request.catalog_profile.shows),
+    )
+
+    grid, skeleton, warnings, llm_calls = await propose_quarterly_grid(request)
+
+    cost_usd = calculate_cost(
+        model="gpt-4o-mini",
+        prompt_tokens=1500 * llm_calls,
+        completion_tokens=1000 * llm_calls,
+    )
+    grid_id = f"grid-{request.channel.name}-q{request.quarter[1]}-{request.year}-{uuid.uuid4().hex[:8]}"
+    grid_id = grid_id.lower().replace(" ", "-")
+
+    return QuarterlyGridResponse(
+        grid_id=grid_id,
+        status="partial" if warnings else "success",
+        grid=grid,
+        skeleton=skeleton,
+        warnings=warnings,
+        cost_estimate={
+            "estimated_cost_usd": cost_usd,
+            "llm_calls_used": llm_calls,
+            "estimated_tokens": f"~{2500 * llm_calls}",
+            "provider": "openrouter",
+            "model": "gpt-4o-mini",
+        },
+        suggested_next_steps=[
+            "Run the deterministic feasibility checker over this grid",
+            "If shortfalls are found, call repair-quarterly-grid with the report",
+            "Once feasible, freeze and store the grid in Tunarr Scheduler",
+            "Generate monthly overrides on top of the frozen grid",
+        ],
+    )
+
+
+@router.post(
+    "/api/scheduling/repair-quarterly-grid", response_model=QuarterlyGridRepairResponse
+)
+async def repair_grid(request: QuarterlyGridRepairRequest) -> QuarterlyGridRepairResponse:
+    """Repair a grid against deterministic feasibility findings (Phase 4/5).
+
+    Targeted fix: only the strips named in the feasibility report should change.
+    This is the LLM half of the propose -> check -> repair loop that Tunarr
+    Scheduler drives.
+
+    HTTP Responses:
+        200: Grid repaired successfully
+        400: Invalid request
+        500: LLM invocation failed or response invalid
+    """
+    logger.info(
+        "Repairing grid for channel='%s' (%s findings)",
+        request.channel.name,
+        len(request.feasibility_report.strip_findings),
+    )
+
+    revised, changes, llm_calls = await repair_quarterly_grid(request)
+
+    cost_usd = calculate_cost(
+        model="gpt-4o-mini",
+        prompt_tokens=2000 * llm_calls,
+        completion_tokens=1500 * llm_calls,
+    )
+    grid_id = f"grid-repair-{request.channel.name}-{uuid.uuid4().hex[:8]}".lower().replace(" ", "-")
+
+    return QuarterlyGridRepairResponse(
+        grid_id=grid_id,
+        status="success",
+        grid=revised,
+        changes=changes,
+        cost_estimate={
+            "estimated_cost_usd": cost_usd,
+            "llm_calls_used": llm_calls,
+            "estimated_tokens": f"~{3500 * llm_calls}",
+            "provider": "openrouter",
+            "model": "gpt-4o-mini",
+        },
+    )
