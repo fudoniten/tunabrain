@@ -62,7 +62,7 @@ def get_chat_model(task: LLMTask = LLMTask.DEFAULT):
 
     if settings.llm_provider == "openrouter":
         return ChatOpenAI(
-            model=settings.llm_model,
+            model=model_to_use,
             api_key=settings.openrouter_api_key,
             base_url=_OPENROUTER_BASE_URL,
         )

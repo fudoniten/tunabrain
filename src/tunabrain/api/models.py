@@ -5,6 +5,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from tunabrain.scheduling.grid import (
+    CatalogProfile,
+    DaypartSkeleton,
+    FeasibilityReport,
+    Grid,
+    Override,
+)
+
 
 class MediaItem(BaseModel):
     """A piece of media in the Tunarr library."""
@@ -669,3 +677,127 @@ class MonthlyStrategyResponse(BaseModel):
         default_factory=list,
         description="Recommended next actions"
     )
+
+
+# ============================================================================
+# Quarterly Grid Proposal (Phase 4)
+# ============================================================================
+
+
+class QuarterlyGridRequest(BaseModel):
+    """Request to propose one channel's frozen quarterly grid.
+
+    Per-channel by design: Tunarr Scheduler loops channels and calls this once
+    each, so every request stays small and bounded. Tunabrain runs two internal
+    passes (dayparting skeleton, then strip-fill per daypart) against the
+    ``catalog_profile`` — it never sees raw media.
+    """
+
+    channel: ChannelContext = Field(..., description="Channel to author a grid for")
+    quarter: Literal["Q1", "Q2", "Q3", "Q4"] = Field(..., description="Quarter")
+    year: int = Field(..., ge=2024, le=2030)
+    catalog_profile: CatalogProfile = Field(
+        ..., description="The shape of available media for this channel"
+    )
+    quarterly_theme: str | None = Field(
+        None,
+        description="Optional creative theme from the quarterly-strategy endpoint, for coherence",
+    )
+    strategic_guidance: str | None = Field(
+        None, description="Optional channel-specific direction"
+    )
+    broadcast_day_start: str = Field(
+        "06:00", description="Wall-clock start of the programmable day ('HH:MM')"
+    )
+    default_media_id: str | None = Field(
+        None,
+        description="Optional fallback media_id (e.g. 'random:sitcom') to fill uncovered time",
+    )
+    cost_tier: Literal["economy", "balanced", "premium"] = Field("balanced")
+
+
+class QuarterlyGridResponse(BaseModel):
+    """Response carrying the proposed grid plus its dayparting skeleton."""
+
+    grid_id: str = Field(..., description="Unique id for auditing")
+    status: Literal["success", "partial", "error"] = Field(...)
+    grid: Grid = Field(..., description="The proposed frozen grid for this channel")
+    skeleton: DaypartSkeleton = Field(..., description="The Pass-A dayparting it was filled from")
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Non-fatal issues (e.g. a daypart returned no strips)",
+    )
+    cost_estimate: CostEstimate = Field(...)
+    suggested_next_steps: list[str] = Field(default_factory=list)
+
+
+class QuarterlyGridRepairRequest(BaseModel):
+    """Request to repair an existing grid against feasibility findings.
+
+    Drives the propose -> check -> repair loop: Tunarr runs the deterministic
+    feasibility checker, and feeds any shortfalls back here for a targeted fix.
+    Only the flagged strips should change; the rest of the grid stays put.
+    """
+
+    channel: ChannelContext = Field(...)
+    catalog_profile: CatalogProfile = Field(...)
+    current_grid: Grid = Field(..., description="The grid that failed feasibility")
+    feasibility_report: FeasibilityReport = Field(
+        ..., description="Deterministic findings to address"
+    )
+    cost_tier: Literal["economy", "balanced", "premium"] = Field("balanced")
+
+
+class QuarterlyGridRepairResponse(BaseModel):
+    """Response carrying the revised grid."""
+
+    grid_id: str = Field(...)
+    status: Literal["success", "partial", "error"] = Field(...)
+    grid: Grid = Field(..., description="The revised grid")
+    changes: list[str] = Field(
+        default_factory=list, description="Human-readable summary of what was changed"
+    )
+    cost_estimate: CostEstimate = Field(...)
+
+
+# ============================================================================
+# Monthly Overrides (Phase 6)
+# ============================================================================
+
+
+class MonthlyOverridesRequest(BaseModel):
+    """Request to propose sparse monthly overrides over a frozen grid.
+
+    Per channel-month. The grid is supplied as *context* so the LLM proposes only
+    deltas, never a re-authored schedule.
+    """
+
+    channel: ChannelContext = Field(...)
+    month: str = Field(..., description="Month identifier, 'YYYY-MM'")
+    grid: Grid = Field(..., description="The frozen weekly grid this month layers over")
+    catalog_profile: CatalogProfile = Field(
+        ..., description="Available media, for choosing special-event content"
+    )
+    monthly_theme: str | None = Field(
+        None, description="Optional monthly theme for coherence"
+    )
+    planned_events: list[str] = Field(
+        default_factory=list,
+        description="Operator-supplied events/requests (e.g. 'Cheers marathon Sat the 10th')",
+    )
+    strategic_guidance: str | None = Field(None, description="Optional month-specific direction")
+    cost_tier: Literal["economy", "balanced", "premium"] = Field("balanced")
+
+
+class MonthlyOverridesResponse(BaseModel):
+    """Response carrying the sparse override deltas for the month."""
+
+    overrides_id: str = Field(..., description="Unique id for auditing")
+    status: Literal["success", "partial", "error"] = Field(...)
+    month: str = Field(...)
+    overrides: list[Override] = Field(
+        default_factory=list, description="Sparse exceptions (may be empty)"
+    )
+    warnings: list[str] = Field(default_factory=list)
+    cost_estimate: CostEstimate = Field(...)
+    suggested_next_steps: list[str] = Field(default_factory=list)
