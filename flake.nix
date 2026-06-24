@@ -16,9 +16,9 @@
 
         pkgs = import nixpkgs { inherit system; };
 
-        helpers = nix-helpers.packages."${system}";
+        helpers = nix-helpers.legacyPackages."${system}";
 
-        pythonEnv = pkgs.python311.withPackages (ps: [
+        pythonEnv = pkgs.python312.withPackages (ps: [
           ps.fastapi
           ps.uvicorn
           ps.pydantic
@@ -32,7 +32,7 @@
 
         tunabrainServer = pkgs.writeShellApplication {
           name = "tunabrain-server";
-          runtimeInputs = [ pythonEnv pkgs.python311 ];
+          runtimeInputs = [ pythonEnv pkgs.python312 ];
           text = ''
             export PYTHONPATH=${./src}:${"PYTHONPATH:-"}
             exec python -m tunabrain "$@"
@@ -91,9 +91,9 @@
           packages = [
             pythonEnv
             pkgs.ruff
-            pkgs.python311Packages.pytest
-            pkgs.python311Packages.pytest-asyncio
-            pkgs.python311Packages.anyio
+            pkgs.python312Packages.pytest
+            pkgs.python312Packages.pytest-asyncio
+            pkgs.python312Packages.anyio
           ];
           shellHook = ''
             export PYTHONPATH=${builtins.getEnv "PWD"}/src:$PYTHONPATH
@@ -106,9 +106,9 @@
           src = ./.;
           buildInputs = [
             pythonEnv
-            pkgs.python311Packages.pytest
-            pkgs.python311Packages.pytest-asyncio
-            pkgs.python311Packages.anyio
+            pkgs.python312Packages.pytest
+            pkgs.python312Packages.pytest-asyncio
+            pkgs.python312Packages.anyio
           ];
 
           buildPhase = ''
