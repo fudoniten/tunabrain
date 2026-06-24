@@ -30,6 +30,8 @@ from tunabrain.api.models import (
     QuarterlyGridResponse,
     QuarterlyGridRepairRequest,
     QuarterlyGridRepairResponse,
+    MonthlyOverridesRequest,
+    MonthlyOverridesResponse,
     ErrorResponse,
 )
 from tunabrain.chains.bumpers import generate_bumpers
@@ -45,6 +47,7 @@ from tunabrain.scheduling.quarterly_grid import (
     propose_quarterly_grid,
     repair_quarterly_grid,
 )
+from tunabrain.scheduling.monthly_overrides import propose_monthly_overrides
 from tunabrain.scheduling.cost import calculate_cost
 from tunabrain.config import is_debug_enabled
 from tunabrain.version import get_git_info
@@ -453,4 +456,55 @@ async def repair_grid(request: QuarterlyGridRepairRequest) -> QuarterlyGridRepai
             "provider": "openrouter",
             "model": "gpt-4o-mini",
         },
+    )
+
+
+@router.post("/api/scheduling/propose-monthly-overrides", response_model=MonthlyOverridesResponse)
+async def propose_overrides(request: MonthlyOverridesRequest) -> MonthlyOverridesResponse:
+    """Propose sparse monthly overrides over a frozen grid (Phase 6).
+
+    The grid is supplied as context so the LLM emits only the month's exceptions
+    (special events, one-off marathons, recurring tweaks), never a re-authored
+    schedule. An empty override list is a normal, common result.
+
+    HTTP Responses:
+        200: Overrides proposed successfully
+        400: Invalid request
+        500: LLM invocation failed or response invalid
+    """
+    logger.info(
+        "Proposing monthly overrides for channel='%s' month=%s",
+        request.channel.name,
+        request.month,
+    )
+
+    overrides, warnings, llm_calls = await propose_monthly_overrides(request)
+
+    cost_usd = calculate_cost(
+        model="gpt-4o-mini",
+        prompt_tokens=1500 * llm_calls,
+        completion_tokens=800 * llm_calls,
+    )
+    overrides_id = (
+        f"overrides-{request.channel.name}-{request.month.replace('-', '')}-{uuid.uuid4().hex[:8]}"
+    ).lower().replace(" ", "-")
+
+    return MonthlyOverridesResponse(
+        overrides_id=overrides_id,
+        status="partial" if warnings else "success",
+        month=request.month,
+        overrides=overrides,
+        warnings=warnings,
+        cost_estimate={
+            "estimated_cost_usd": cost_usd,
+            "llm_calls_used": llm_calls,
+            "estimated_tokens": f"~{2300 * llm_calls}",
+            "provider": "openrouter",
+            "model": "gpt-4o-mini",
+        },
+        suggested_next_steps=[
+            "Store the overrides in Tunarr Scheduler alongside the frozen grid",
+            "Expand each week with the deterministic expander (grid + these overrides)",
+            "No Tunabrain call is needed for weekly expansion",
+        ],
     )

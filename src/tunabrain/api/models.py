@@ -10,6 +10,7 @@ from tunabrain.scheduling.grid import (
     DaypartSkeleton,
     FeasibilityReport,
     Grid,
+    Override,
 )
 
 
@@ -757,3 +758,46 @@ class QuarterlyGridRepairResponse(BaseModel):
         default_factory=list, description="Human-readable summary of what was changed"
     )
     cost_estimate: CostEstimate = Field(...)
+
+
+# ============================================================================
+# Monthly Overrides (Phase 6)
+# ============================================================================
+
+
+class MonthlyOverridesRequest(BaseModel):
+    """Request to propose sparse monthly overrides over a frozen grid.
+
+    Per channel-month. The grid is supplied as *context* so the LLM proposes only
+    deltas, never a re-authored schedule.
+    """
+
+    channel: ChannelContext = Field(...)
+    month: str = Field(..., description="Month identifier, 'YYYY-MM'")
+    grid: Grid = Field(..., description="The frozen weekly grid this month layers over")
+    catalog_profile: CatalogProfile = Field(
+        ..., description="Available media, for choosing special-event content"
+    )
+    monthly_theme: str | None = Field(
+        None, description="Optional monthly theme for coherence"
+    )
+    planned_events: list[str] = Field(
+        default_factory=list,
+        description="Operator-supplied events/requests (e.g. 'Cheers marathon Sat the 10th')",
+    )
+    strategic_guidance: str | None = Field(None, description="Optional month-specific direction")
+    cost_tier: Literal["economy", "balanced", "premium"] = Field("balanced")
+
+
+class MonthlyOverridesResponse(BaseModel):
+    """Response carrying the sparse override deltas for the month."""
+
+    overrides_id: str = Field(..., description="Unique id for auditing")
+    status: Literal["success", "partial", "error"] = Field(...)
+    month: str = Field(...)
+    overrides: list[Override] = Field(
+        default_factory=list, description="Sparse exceptions (may be empty)"
+    )
+    warnings: list[str] = Field(default_factory=list)
+    cost_estimate: CostEstimate = Field(...)
+    suggested_next_steps: list[str] = Field(default_factory=list)
