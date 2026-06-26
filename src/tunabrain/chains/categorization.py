@@ -61,6 +61,33 @@ def _fallback_dimensions(categories: dict[str, CategoryDefinition]) -> list[Dime
     return [_fallback_dimension(name, defn) for name, defn in categories.items()]
 
 
+# Dimension names that should also be surfaced as channel mappings so that
+# callers passing channels as a categorization dimension (rather than via the
+# dedicated ``channels`` request field) still receive populated ``mappings``.
+_CHANNEL_DIMENSION_NAMES = {"channel", "channels"}
+
+
+def _channel_mappings_from_dimensions(
+    dimensions: list[DimensionSelection],
+) -> list[ChannelMapping]:
+    """Derive channel mappings from a ``channel`` categorization dimension.
+
+    Some callers express channel assignment as a normal categorization
+    dimension (its candidate values being channel names) instead of supplying
+    the dedicated ``channels`` request field.  In that case the LLM selections
+    land in ``dimensions`` and the ``mappings`` field would otherwise be empty.
+    This bridges the two so downstream consumers reading ``mappings`` see the
+    chosen channels.
+    """
+    mappings: list[ChannelMapping] = []
+    for dim in dimensions:
+        if dim.dimension.lower() not in _CHANNEL_DIMENSION_NAMES:
+            continue
+        for value in dim.values:
+            mappings.append(ChannelMapping(channel_name=value, reasons=list(dim.notes)))
+    return mappings
+
+
 def _normalize_category_values(
     values: list[str] | list[CategoryValue],
 ) -> list[tuple[str, str | None]]:
@@ -261,7 +288,11 @@ async def categorize_media(
     else:
         dimensions = []
 
-    # --- Channel mapping (separate chain) ---
+    # --- Channel mapping ---
+    # Prefer the dedicated channel-mapping chain when an explicit ``channels``
+    # list is supplied.  Otherwise, if the caller expressed channels as a
+    # categorization dimension, surface those selections as channel mappings so
+    # consumers reading ``mappings`` are not left with an empty list.
     channel_mappings: list[ChannelMapping] = []
     if channels_list:
         channel_mappings = await map_media_to_channels(
@@ -270,6 +301,8 @@ async def categorize_media(
             debug=debug_enabled,
             llm=llm_instance,
         )
+    else:
+        channel_mappings = _channel_mappings_from_dimensions(dimensions)
 
     result = CategorizationResult(
         dimensions=dimensions,
