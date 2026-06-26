@@ -7,7 +7,13 @@ from pydantic import BaseModel, Field
 
 
 class MediaItem(BaseModel):
-    """A piece of media in the Tunarr library."""
+    """A piece of media in the Tunarr library.
+
+    DEPRECATED FIELD: `genres` is a hardcoded first-class field. In the dimension
+    model, genre should be just another dimension value (e.g. "genre:comedy"),
+    not a top-level schema property. Use `categories` in CategorizationRequest
+    to supply dimensions instead.
+    """
 
     id: str = Field(..., description="Unique identifier for the media item")
     title: str = Field(..., description="Title of the media")
@@ -15,6 +21,7 @@ class MediaItem(BaseModel):
         None, description="IMDB identifier for the media item, e.g. tt0149460"
     )
     description: str | None = None
+    # DEPRECATED: Hardcoded genres field. Use dimensions instead.
     genres: list[str] = Field(default_factory=list)
     duration_minutes: int | None = Field(None, description="Runtime in minutes")
     rating: str | None = Field(None, description="Content rating, e.g. TV-14")
@@ -34,7 +41,13 @@ class Channel(BaseModel):
 
 
 class TaggingRequest(BaseModel):
-    """Request to generate scheduling-oriented tags for a media item."""
+    """Request to generate free-form tags for a media item.
+
+    Tags are free-form metadata, separate from dimensions. Use
+    CategorizationRequest for structured dimension-based categorization.
+    Both are valid: tags for arbitrary keywords, dimensions for controlled
+    vocabulary scheduling attributes.
+    """
 
     media: MediaItem
     existing_tags: list[str] = Field(
@@ -48,11 +61,17 @@ class TaggingRequest(BaseModel):
 
 
 class TaggingResponse(BaseModel):
+    """Free-form tag response."""
+
     tags: list[str]
 
 
 class TagSample(BaseModel):
-    """Metadata about an existing tag for governance review."""
+    """Metadata about an existing tag for governance review.
+
+    Tag governance helps keep the free-form tag namespace clean and useful.
+    Dimensions use a controlled vocabulary, so they don't need governance.
+    """
 
     tag: str = Field(..., description="The original tag value to review")
     usage_count: int = Field(
@@ -64,8 +83,13 @@ class TagSample(BaseModel):
     )
 
 
+# DEPRECATED: Hardcoded channel mapping request. Use CategorizationRequest with "channel" dimension.
 class ChannelMappingRequest(BaseModel):
-    """Request to map media to one or more channels."""
+    """Request to map media to one or more channels.
+
+    DEPRECATED: Channels are a dimension now. Use CategorizationRequest
+    with a "channel" dimension instead.
+    """
 
     media: MediaItem
     channels: list[Channel]
@@ -75,12 +99,18 @@ class ChannelMappingRequest(BaseModel):
     )
 
 
+# DEPRECATED: Hardcoded channel mapping. Use DimensionSelection with "channel" dimension.
 class ChannelMapping(BaseModel):
+    """DEPRECATED: Hardcoded channel mapping. Use DimensionSelection instead."""
+
     channel_name: str
     reasons: list[str] = Field(default_factory=list)
 
 
+# DEPRECATED: Hardcoded channel mapping response. Use CategorizationResponse instead.
 class ChannelMappingResponse(BaseModel):
+    """DEPRECATED: Hardcoded channel mapping response. Use CategorizationResponse instead."""
+
     mappings: list[ChannelMapping]
 
 

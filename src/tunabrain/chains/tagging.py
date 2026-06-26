@@ -18,20 +18,21 @@ logger = logging.getLogger(__name__)
 
 
 class TaggingResult(BaseModel):
-    """Structured response capturing the final tag set."""
+    """Free-form tag result."""
 
     tags: list[str] = Field(
-        description="Scheduling-friendly tags after reviewing current and existing taxonomy"
+        description="Free-form tags after reviewing current and existing taxonomy"
     )
 
 
 async def generate_tags(
     media: MediaItem, existing_tags: list[str] | None = None, *, debug: bool = False
 ) -> list[str]:
-    """Generate scheduling-friendly tags for the provided media item.
+    """Generate free-form tags for the provided media item.
 
-    This function should orchestrate LangChain components to build a set of
-    concise tags that help place the media into thematic schedules.
+    Tags are free-form metadata, separate from dimensions. Use /categorize
+    for structured dimension-based categorization. Both are valid: tags for
+    arbitrary keywords, dimensions for controlled vocabulary scheduling attributes.
     """
 
     logger.info("Generating tags for '%s'", media.title)

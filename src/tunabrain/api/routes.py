@@ -40,6 +40,13 @@ async def health() -> dict[str, str]:
 
 @router.post("/tags", response_model=TaggingResponse)
 async def tag_media(request: TaggingRequest) -> TaggingResponse:
+    """Generate free-form tags for a media item.
+
+    Tags are free-form metadata, separate from dimensions. Use /categorize
+    for structured dimension-based categorization (channel, genre, etc.).
+    Both are valid: tags for arbitrary keywords, dimensions for controlled
+    vocabulary scheduling attributes.
+    """
     logger.info("Processing tagging request for title='%s'", request.media.title)
     tags = await generate_tags(
         request.media,
@@ -50,7 +57,10 @@ async def tag_media(request: TaggingRequest) -> TaggingResponse:
     return TaggingResponse(tags=tags)
 
 
-@router.post("/channel-mapping", response_model=ChannelMappingResponse)
+# DEPRECATED: Hardcoded channel mapping. Channels are a dimension now.
+# Use /categorize with a "channel" dimension instead.
+# See TS DIMENSION_CLEANUP.md for the full migration plan.
+@router.post("/channel-mapping", response_model=ChannelMappingResponse, deprecated=True)
 async def channel_mapping(request: ChannelMappingRequest) -> ChannelMappingResponse:
     logger.info(
         "Processing channel mapping request with %s media items and %s channels",
@@ -88,6 +98,16 @@ async def categorize(request: CategorizationRequest) -> CategorizationResponse:
 
 @router.post("/schedule", response_model=ScheduleResponse)
 async def schedule(request: ScheduleRequest) -> ScheduleResponse:
+    """Create a schedule using the autonomous agent.
+
+    This endpoint uses the new LangGraph-based scheduling agent
+    (build_schedule_with_agent) internally. The parameter style is
+    transitional; the agent itself is current.
+
+    NOTE: The layered grid endpoints (/api/scheduling/*) are planned
+    but not yet implemented in this branch. This endpoint remains
+    the active scheduling API until those land.
+    """
     logger.info(
         "Processing schedule request for channel='%s' with %s media items, "
         "start_date='%s', cost_tier='%s'",
@@ -96,8 +116,6 @@ async def schedule(request: ScheduleRequest) -> ScheduleResponse:
         request.start_date.strftime("%Y-%m-%d"),
         request.cost_tier,
     )
-    # Note: build_schedule now accepts old-style params but converts to ScheduleRequest internally
-    # In future, we can pass request directly to build_schedule_with_agent
     return await build_schedule(
         channel=request.channel,
         media=request.media,
@@ -127,6 +145,11 @@ async def bumpers(request: BumperRequest) -> BumperResponse:
 
 @router.post("/tag-governance/triage", response_model=TagTriageResponse)
 async def triage_tag_governance(request: TagTriageRequest) -> TagTriageResponse:
+    """Tag governance triage for free-form tags.
+
+    Keeps the free-form tag namespace clean. Dimensions use a controlled
+    vocabulary and don't need governance.
+    """
     logger.info("Processing tag governance triage for %s tags", len(request.tags))
     decisions = await triage_tags(
         request.tags,
@@ -139,6 +162,11 @@ async def triage_tag_governance(request: TagTriageRequest) -> TagTriageResponse:
 
 @router.post("/tags/audit", response_model=TagAuditResponse)
 async def audit_tag_usefulness(request: TagAuditRequest) -> TagAuditResponse:
+    """Tag audit for free-form tags.
+
+    Identifies tags that are not useful for scheduling. Free-form tags
+    need governance; dimensions use a controlled vocabulary and don't.
+    """
     logger.info("Processing tag audit for %s tags", len(request.tags))
     tags_to_delete = await audit_tags(
         request.tags,
