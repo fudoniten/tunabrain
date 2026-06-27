@@ -4,6 +4,7 @@ import asyncio
 import logging
 
 from langchain_core.exceptions import OutputParserException
+from langchain_core.messages import HumanMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableSerializable
@@ -18,12 +19,16 @@ from tunabrain.api.models import (
     MediaItem,
 )
 from tunabrain.chains.channel_mapping import map_media_to_channels
+from tunabrain.chains.validation import format_invalid_feedback, partition_values
 from tunabrain.config import is_debug_enabled
 from tunabrain.llm import get_chat_model
 from tunabrain.tools.wikipedia import WikipediaLookup
 
-
 logger = logging.getLogger(__name__)
+
+# Number of times to re-prompt the LLM after it returns values that are not in
+# the provided option set before giving up and filtering them out.
+_MAX_VALIDATION_RETRIES = 2
 
 
 class CategorizationResult(BaseModel):
@@ -146,13 +151,58 @@ async def _categorize_single(
         logger.debug("LLM request (categorization/%s): %s", category_name, inputs)
 
     messages = prompt.format_messages(**inputs)
-    response = await llm.ainvoke(messages)
 
-    if debug:
-        logger.debug("LLM raw response (categorization/%s): %s", category_name, response)
+    allowed_values = [value for value, _ in normalized_values]
 
-    result = await parser.ainvoke(response)
-    dim = result.dimension
+    dim: DimensionSelection | None = None
+    # Re-prompt the LLM whenever it returns values outside the option set so it
+    # can correct itself.  After the retries are exhausted we filter below so an
+    # invalid value never propagates downstream.
+    for attempt in range(_MAX_VALIDATION_RETRIES + 1):
+        response = await llm.ainvoke(messages)
+
+        if debug:
+            logger.debug(
+                "LLM raw response (categorization/%s, attempt %s): %s",
+                category_name,
+                attempt + 1,
+                response,
+            )
+
+        result = await parser.ainvoke(response)
+        dim = result.dimension
+
+        valid, invalid = partition_values(dim.values, allowed_values)
+        if not invalid:
+            break
+
+        logger.warning(
+            "LLM returned invalid value(s) for dimension '%s': %s (valid options: %s)",
+            category_name,
+            invalid,
+            allowed_values,
+        )
+
+        if attempt < _MAX_VALIDATION_RETRIES:
+            # Feed the rejected choices back so the model can re-select.
+            messages = [
+                *messages,
+                response,
+                HumanMessage(content=format_invalid_feedback(invalid, allowed_values)),
+            ]
+
+    assert dim is not None  # the loop always runs at least once
+
+    # Final safety net: never return values outside the provided option set.
+    valid, invalid = partition_values(dim.values, allowed_values)
+    if invalid:
+        logger.warning(
+            "Dropping invalid value(s) for dimension '%s' after %s attempt(s): %s",
+            category_name,
+            _MAX_VALIDATION_RETRIES + 1,
+            invalid,
+        )
+    dim.values = valid
 
     # Ensure the dimension name matches the requested category.
     dim.dimension = category_name
