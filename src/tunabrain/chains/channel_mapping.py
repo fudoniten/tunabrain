@@ -4,17 +4,22 @@ import logging
 from collections.abc import Iterable
 
 from langchain_core.exceptions import OutputParserException
+from langchain_core.messages import HumanMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableSerializable
 from pydantic import BaseModel, Field
 
 from tunabrain.api.models import Channel, ChannelMapping, MediaItem
+from tunabrain.chains.validation import format_invalid_feedback, partition_values
 from tunabrain.config import is_debug_enabled
 from tunabrain.llm import get_chat_model
 
-
 logger = logging.getLogger(__name__)
+
+# Number of times to re-prompt the LLM after it selects channels that are not in
+# the provided option set before giving up and filtering them out.
+_MAX_VALIDATION_RETRIES = 2
 
 
 class ChannelMappingResult(BaseModel):
@@ -80,12 +85,53 @@ async def _call_llm(
         logger.debug("LLM request (channel mapping): %s", inputs)
 
     messages = prompt.format_messages(**inputs)
-    response = await llm.ainvoke(messages)
 
-    if debug:
-        logger.debug("LLM raw response (channel mapping): %s", response)
+    allowed_names = [channel.name for channel in channels]
 
-    return await parser.ainvoke(response)
+    result: ChannelMappingResult | None = None
+    # Re-prompt whenever the LLM selects a channel outside the option set so it
+    # can correct itself; invalid selections are filtered out below regardless.
+    for attempt in range(_MAX_VALIDATION_RETRIES + 1):
+        response = await llm.ainvoke(messages)
+
+        if debug:
+            logger.debug(
+                "LLM raw response (channel mapping, attempt %s): %s", attempt + 1, response
+            )
+
+        result = await parser.ainvoke(response)
+
+        selected = [mapping.channel_name for mapping in result.mappings]
+        _, invalid = partition_values(selected, allowed_names)
+        if not invalid:
+            break
+
+        logger.warning(
+            "LLM selected invalid channel(s): %s (valid options: %s)",
+            invalid,
+            allowed_names,
+        )
+
+        if attempt < _MAX_VALIDATION_RETRIES:
+            messages = [
+                *messages,
+                response,
+                HumanMessage(content=format_invalid_feedback(invalid, allowed_names)),
+            ]
+
+    assert result is not None  # the loop always runs at least once
+
+    # Final safety net: never return channels outside the provided option set.
+    allowed_set = set(allowed_names)
+    kept = [mapping for mapping in result.mappings if mapping.channel_name in allowed_set]
+    if len(kept) != len(result.mappings):
+        logger.warning(
+            "Dropping invalid channel selection(s) after %s attempt(s)",
+            _MAX_VALIDATION_RETRIES + 1,
+        )
+    result.mappings = kept
+
+    return result
 
 
 def _fallback_mapping(channels: list[Channel]) -> list[ChannelMapping]:
