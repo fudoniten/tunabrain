@@ -102,6 +102,38 @@ def test_summarize_profile_respects_max_shows_over_schedulable_only():
     assert "and 1 more schedulable shows" in text
 
 
+def test_summarize_profile_rotates_tail_so_no_show_is_permanently_dead():
+    import random
+
+    # A catalog larger than the budget: shows s0..s9, all schedulable, descending
+    # episode counts so s0/s1 are the deterministic anchors and s2..s9 the tail.
+    shows = [
+        ShowProfile(
+            media_id=f"series:s{i}",
+            title=f"Show {i}",
+            episode_count=100,
+            available_episode_count=100 - i,
+            avg_runtime_minutes=20,
+        )
+        for i in range(10)
+    ]
+    profile = CatalogProfile(total_items=10, total_episodes=955, movie_count=0, shows=shows)
+
+    seen: set[int] = set()
+    for seed in range(30):
+        text = qg.summarize_catalog_profile(profile, max_shows=4, rng=random.Random(seed))
+        for i in range(10):
+            if f"series:s{i}\n" in text or f"series:s{i})" in text:
+                seen.add(i)
+
+    # Every schedulable show surfaces across runs -> nothing is permanently dead.
+    assert seen == set(range(10))
+    # Anchors (highest-volume) are always present; a single run is still capped.
+    one_run = qg.summarize_catalog_profile(profile, max_shows=4, rng=random.Random(0))
+    assert "series:s0)" in one_run and "series:s1)" in one_run
+    assert "and 6 more schedulable shows" in one_run
+
+
 def test_skeleton_prompt_construction():
     messages = qg.build_daypart_skeleton_prompt(_request())
     assert len(messages) == 2

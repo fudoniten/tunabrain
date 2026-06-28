@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 
 from openai import LengthFinishReasonError
 
@@ -51,6 +52,7 @@ def summarize_catalog_profile(
     max_shows: int = 40,
     *,
     min_available_episodes: int = 1,
+    rng: random.Random | None = None,
 ) -> str:
     """Render the catalog *shape* compactly for a prompt (never raw media).
 
@@ -58,8 +60,13 @@ def summarize_catalog_profile(
     omitted from the per-show list: they cannot be stripped into a schedule, so
     listing them only burns prompt budget and tempts the model to plan blocks it
     can't fill. Genres with no available episodes are pruned for the same reason.
-    The remaining schedulable shows are listed highest-volume first up to
-    ``max_shows``; any further tail is acknowledged with a count for honesty.
+
+    When more schedulable shows remain than ``max_shows``, a strict top-N by
+    episode count would hide the entire long tail *every* run, leaving those
+    shows effectively dead. Instead the highest-volume shows are kept as fixed
+    anchors (the best strip candidates) and the rest of the budget is sampled
+    randomly from the tail, so lower-volume shows rotate into view across runs.
+    Pass ``rng`` (a seeded ``random.Random``) for deterministic output in tests.
     """
     lines: list[str] = []
 
@@ -86,9 +93,22 @@ def summarize_catalog_profile(
     )
     dropped_unschedulable = len(profile.shows) - len(schedulable)
 
+    if len(schedulable) > max_shows:
+        picker = rng or random
+        anchor_count = max(1, max_shows // 2)
+        tail = schedulable[anchor_count:]
+        sampled = picker.sample(tail, k=min(max_shows - anchor_count, len(tail)))
+        selected = sorted(
+            schedulable[:anchor_count] + sampled,
+            key=lambda s: s.available_episode_count,
+            reverse=True,
+        )
+    else:
+        selected = schedulable
+
     lines.append("")
     lines.append("Shows (media_id | available eps | avg runtime | genres):")
-    for s in schedulable[:max_shows]:
+    for s in selected:
         runtime = f"~{round(s.avg_runtime_minutes)}min" if s.avg_runtime_minutes else "?min"
         genres = ",".join(s.genres) if s.genres else "-"
         lines.append(
