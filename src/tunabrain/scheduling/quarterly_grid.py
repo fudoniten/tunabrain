@@ -20,11 +20,15 @@ from __future__ import annotations
 
 import json
 import logging
+import random
+
+from openai import LengthFinishReasonError
 
 from tunabrain.api.models import (
     QuarterlyGridRepairRequest,
     QuarterlyGridRequest,
 )
+from tunabrain.config import get_settings
 from tunabrain.llm import LLMTask, get_chat_model
 from tunabrain.scheduling.grid import (
     CatalogProfile,
@@ -43,16 +47,37 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def summarize_catalog_profile(profile: CatalogProfile, max_shows: int = 40) -> str:
-    """Render the catalog *shape* compactly for a prompt (never raw media)."""
+def summarize_catalog_profile(
+    profile: CatalogProfile,
+    max_shows: int = 40,
+    *,
+    min_available_episodes: int = 1,
+    rng: random.Random | None = None,
+) -> str:
+    """Render the catalog *shape* compactly for a prompt (never raw media).
+
+    Shows with fewer than ``min_available_episodes`` available episodes are
+    omitted from the per-show list: they cannot be stripped into a schedule, so
+    listing them only burns prompt budget and tempts the model to plan blocks it
+    can't fill. Genres with no available episodes are pruned for the same reason.
+
+    When more schedulable shows remain than ``max_shows``, a strict top-N by
+    episode count would hide the entire long tail *every* run, leaving those
+    shows effectively dead. Instead the highest-volume shows are kept as fixed
+    anchors (the best strip candidates) and the rest of the budget is sampled
+    randomly from the tail, so lower-volume shows rotate into view across runs.
+    Pass ``rng`` (a seeded ``random.Random``) for deterministic output in tests.
+    """
     lines: list[str] = []
 
     if profile.genres:
         genre_bits = [
             f"{g.genre} ({g.show_count} shows / {g.episode_count} eps)"
             for g in sorted(profile.genres, key=lambda g: g.episode_count, reverse=True)
+            if g.episode_count > 0
         ]
-        lines.append("Genres: " + ", ".join(genre_bits))
+        if genre_bits:
+            lines.append("Genres: " + ", ".join(genre_bits))
 
     if profile.runtime_histogram:
         rt_bits = [f"{b.label}: {b.item_count}" for b in profile.runtime_histogram]
@@ -61,19 +86,40 @@ def summarize_catalog_profile(profile: CatalogProfile, max_shows: int = 40) -> s
     if profile.movie_count:
         lines.append(f"Movies available: {profile.movie_count}")
 
+    schedulable = sorted(
+        (s for s in profile.shows if s.available_episode_count >= min_available_episodes),
+        key=lambda s: s.available_episode_count,
+        reverse=True,
+    )
+    dropped_unschedulable = len(profile.shows) - len(schedulable)
+
+    if len(schedulable) > max_shows:
+        picker = rng or random
+        anchor_count = max(1, max_shows // 2)
+        tail = schedulable[anchor_count:]
+        sampled = picker.sample(tail, k=min(max_shows - anchor_count, len(tail)))
+        selected = sorted(
+            schedulable[:anchor_count] + sampled,
+            key=lambda s: s.available_episode_count,
+            reverse=True,
+        )
+    else:
+        selected = schedulable
+
     lines.append("")
     lines.append("Shows (media_id | available eps | avg runtime | genres):")
-    top_shows = sorted(
-        profile.shows, key=lambda s: s.available_episode_count, reverse=True
-    )[:max_shows]
-    for s in top_shows:
+    for s in selected:
         runtime = f"~{round(s.avg_runtime_minutes)}min" if s.avg_runtime_minutes else "?min"
         genres = ",".join(s.genres) if s.genres else "-"
         lines.append(
             f"  - {s.title} ({s.media_id}) | {s.available_episode_count} eps | {runtime} | {genres}"
         )
-    if len(profile.shows) > max_shows:
-        lines.append(f"  ... and {len(profile.shows) - max_shows} more shows")
+    if len(schedulable) > max_shows:
+        lines.append(f"  ... and {len(schedulable) - max_shows} more schedulable shows")
+    if dropped_unschedulable > 0:
+        lines.append(
+            f"  ({dropped_unschedulable} further shows have no available episodes and are omitted)"
+        )
 
     return "\n".join(lines)
 
@@ -118,7 +164,7 @@ Channel purpose: {request.channel.description}
 Broadcast day starts at {request.broadcast_day_start}.{theme}{guidance}
 
 AVAILABLE MEDIA (shape only):
-{summarize_catalog_profile(request.catalog_profile)}
+{summarize_catalog_profile(request.catalog_profile, max_shows=get_settings().schedule_max_shows)}
 
 Produce 4-5 contiguous dayparts covering the whole broadcast day."""
 
@@ -180,7 +226,7 @@ DAYPART TO FILL:
 {prior}
 
 AVAILABLE MEDIA (shape only):
-{summarize_catalog_profile(request.catalog_profile)}
+{summarize_catalog_profile(request.catalog_profile, max_shows=get_settings().schedule_max_shows)}
 
 Fill this daypart with recurring strips that realize its role."""
 
@@ -244,7 +290,7 @@ FEASIBILITY FINDINGS TO FIX:
 {problem_block}
 
 AVAILABLE MEDIA (shape only):
-{summarize_catalog_profile(request.catalog_profile)}
+{summarize_catalog_profile(request.catalog_profile, max_shows=get_settings().schedule_max_shows)}
 
 Return the full corrected strip list, changing only what the findings require."""
 
@@ -260,14 +306,35 @@ Return the full corrected strip list, changing only what the findings require.""
 
 
 def _invoke_json(messages: list[dict], *, max_tokens: int, temperature: float) -> dict:
-    """Invoke the scheduling LLM and parse a JSON object response."""
+    """Invoke the scheduling LLM and parse a JSON object response.
+
+    Reasoning-capable models (e.g. ``deepseek-v4-flash``) spend part of the
+    completion budget on hidden reasoning tokens *before* emitting any JSON. If
+    the budget runs out first the response is truncated mid-object and the
+    OpenAI structured-output path raises ``LengthFinishReasonError`` rather than
+    returning partial content. Catch it and surface an actionable message
+    instead of letting it bubble up as an opaque 500.
+    """
     llm = get_chat_model(LLMTask.SCHEDULING)
-    response = llm.invoke(
-        messages,
-        response_format={"type": "json_object"},
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
+    try:
+        response = llm.invoke(
+            messages,
+            response_format={"type": "json_object"},
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    except LengthFinishReasonError as e:
+        logger.error(
+            "LLM response truncated at the %d-token completion limit before valid "
+            "JSON was produced (reasoning models consume part of this budget on "
+            "hidden reasoning tokens).",
+            max_tokens,
+        )
+        raise ValueError(
+            f"LLM response hit the {max_tokens}-token completion budget before "
+            "returning valid JSON. Raise the scheduling token budget or select a "
+            "model that spends fewer reasoning tokens."
+        ) from e
     try:
         return json.loads(response.content)
     except json.JSONDecodeError as e:
@@ -324,9 +391,11 @@ async def propose_quarterly_grid(
     )
     warnings: list[str] = []
 
-    # Pass A - dayparting skeleton (one small call)
+    # Pass A - dayparting skeleton (one small call). The budget must leave room
+    # for reasoning models to "think" before emitting JSON, hence well above the
+    # few hundred tokens the skeleton itself needs.
     skeleton_payload = _invoke_json(
-        build_daypart_skeleton_prompt(request), max_tokens=1200, temperature=0.3
+        build_daypart_skeleton_prompt(request), max_tokens=4096, temperature=0.3
     )
     skeleton = _parse_skeleton(request.channel.name, skeleton_payload)
     logger.info("Dayparting produced %s blocks", len(skeleton.blocks))
@@ -337,7 +406,7 @@ async def propose_quarterly_grid(
     for block in skeleton.blocks:
         payload = _invoke_json(
             build_strip_fill_prompt(request, block, all_strips),
-            max_tokens=1500,
+            max_tokens=4096,
             temperature=0.4,
         )
         llm_calls += 1
@@ -379,7 +448,7 @@ async def repair_quarterly_grid(
         len(request.feasibility_report.strip_findings),
     )
     payload = _invoke_json(
-        build_grid_repair_prompt(request), max_tokens=2000, temperature=0.2
+        build_grid_repair_prompt(request), max_tokens=4096, temperature=0.2
     )
 
     revised_strips = _parse_strips_preserving_ids(

@@ -76,6 +76,64 @@ def test_summarize_profile_includes_shows_and_genres():
     assert "22min" in text  # avg runtime rounded
 
 
+def test_summarize_profile_omits_unschedulable_shows():
+    profile = _profile()
+    profile.shows.append(
+        ShowProfile(
+            media_id="series:noeps",
+            title="Cancelled Pilot",
+            genres=["drama"],
+            episode_count=12,
+            available_episode_count=0,  # nothing to air -> must be pruned
+            avg_runtime_minutes=45,
+        )
+    )
+    text = qg.summarize_catalog_profile(profile)
+    assert "series:noeps" not in text  # dropped from the per-show list
+    assert "1 further shows have no available episodes" in text  # but acknowledged
+    assert "series:seinfeld" in text  # schedulable shows still listed
+
+
+def test_summarize_profile_respects_max_shows_over_schedulable_only():
+    text = qg.summarize_catalog_profile(_profile(), max_shows=1)
+    # Cheers has more available eps than Seinfeld, so it leads; the tail count
+    # reflects schedulable shows, not the raw catalog size.
+    assert "series:cheers" in text
+    assert "and 1 more schedulable shows" in text
+
+
+def test_summarize_profile_rotates_tail_so_no_show_is_permanently_dead():
+    import random
+
+    # A catalog larger than the budget: shows s0..s9, all schedulable, descending
+    # episode counts so s0/s1 are the deterministic anchors and s2..s9 the tail.
+    shows = [
+        ShowProfile(
+            media_id=f"series:s{i}",
+            title=f"Show {i}",
+            episode_count=100,
+            available_episode_count=100 - i,
+            avg_runtime_minutes=20,
+        )
+        for i in range(10)
+    ]
+    profile = CatalogProfile(total_items=10, total_episodes=955, movie_count=0, shows=shows)
+
+    seen: set[int] = set()
+    for seed in range(30):
+        text = qg.summarize_catalog_profile(profile, max_shows=4, rng=random.Random(seed))
+        for i in range(10):
+            if f"series:s{i}\n" in text or f"series:s{i})" in text:
+                seen.add(i)
+
+    # Every schedulable show surfaces across runs -> nothing is permanently dead.
+    assert seen == set(range(10))
+    # Anchors (highest-volume) are always present; a single run is still capped.
+    one_run = qg.summarize_catalog_profile(profile, max_shows=4, rng=random.Random(0))
+    assert "series:s0)" in one_run and "series:s1)" in one_run
+    assert "and 6 more schedulable shows" in one_run
+
+
 def test_skeleton_prompt_construction():
     messages = qg.build_daypart_skeleton_prompt(_request())
     assert len(messages) == 2
@@ -192,6 +250,35 @@ async def test_propose_quarterly_grid_runs_two_passes(_mock_llm):
     assert not warnings
     # strips carry their daypart linkage
     assert {s.daypart for s in grid.strips} == {"daytime", "prime", "overnight"}
+
+
+def test_invoke_json_truncation_raises_actionable_error(monkeypatch):
+    """A length-limit truncation surfaces a clear ValueError, not a raw 500."""
+    from openai import LengthFinishReasonError
+    from openai.types.chat import ChatCompletion
+
+    truncated = ChatCompletion(
+        id="x",
+        model="m",
+        object="chat.completion",
+        created=0,
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "length",
+                "message": {"role": "assistant", "content": '{"blo'},
+            }
+        ],
+    )
+
+    class _TruncatingLLM:
+        def invoke(self, messages, **kwargs):
+            raise LengthFinishReasonError(completion=truncated)
+
+    monkeypatch.setattr(qg, "get_chat_model", lambda *a, **k: _TruncatingLLM())
+
+    with pytest.raises(ValueError, match="completion budget"):
+        qg._invoke_json([{"role": "user", "content": "x"}], max_tokens=4096, temperature=0.3)
 
 
 async def test_repair_preserves_unflagged_strips(_mock_llm, monkeypatch):
