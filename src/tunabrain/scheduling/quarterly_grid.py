@@ -21,6 +21,8 @@ from __future__ import annotations
 import json
 import logging
 
+from openai import LengthFinishReasonError
+
 from tunabrain.api.models import (
     QuarterlyGridRepairRequest,
     QuarterlyGridRequest,
@@ -260,14 +262,35 @@ Return the full corrected strip list, changing only what the findings require.""
 
 
 def _invoke_json(messages: list[dict], *, max_tokens: int, temperature: float) -> dict:
-    """Invoke the scheduling LLM and parse a JSON object response."""
+    """Invoke the scheduling LLM and parse a JSON object response.
+
+    Reasoning-capable models (e.g. ``deepseek-v4-flash``) spend part of the
+    completion budget on hidden reasoning tokens *before* emitting any JSON. If
+    the budget runs out first the response is truncated mid-object and the
+    OpenAI structured-output path raises ``LengthFinishReasonError`` rather than
+    returning partial content. Catch it and surface an actionable message
+    instead of letting it bubble up as an opaque 500.
+    """
     llm = get_chat_model(LLMTask.SCHEDULING)
-    response = llm.invoke(
-        messages,
-        response_format={"type": "json_object"},
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
+    try:
+        response = llm.invoke(
+            messages,
+            response_format={"type": "json_object"},
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    except LengthFinishReasonError as e:
+        logger.error(
+            "LLM response truncated at the %d-token completion limit before valid "
+            "JSON was produced (reasoning models consume part of this budget on "
+            "hidden reasoning tokens).",
+            max_tokens,
+        )
+        raise ValueError(
+            f"LLM response hit the {max_tokens}-token completion budget before "
+            "returning valid JSON. Raise the scheduling token budget or select a "
+            "model that spends fewer reasoning tokens."
+        ) from e
     try:
         return json.loads(response.content)
     except json.JSONDecodeError as e:
@@ -324,9 +347,11 @@ async def propose_quarterly_grid(
     )
     warnings: list[str] = []
 
-    # Pass A - dayparting skeleton (one small call)
+    # Pass A - dayparting skeleton (one small call). The budget must leave room
+    # for reasoning models to "think" before emitting JSON, hence well above the
+    # few hundred tokens the skeleton itself needs.
     skeleton_payload = _invoke_json(
-        build_daypart_skeleton_prompt(request), max_tokens=1200, temperature=0.3
+        build_daypart_skeleton_prompt(request), max_tokens=4096, temperature=0.3
     )
     skeleton = _parse_skeleton(request.channel.name, skeleton_payload)
     logger.info("Dayparting produced %s blocks", len(skeleton.blocks))
@@ -337,7 +362,7 @@ async def propose_quarterly_grid(
     for block in skeleton.blocks:
         payload = _invoke_json(
             build_strip_fill_prompt(request, block, all_strips),
-            max_tokens=1500,
+            max_tokens=4096,
             temperature=0.4,
         )
         llm_calls += 1
@@ -379,7 +404,7 @@ async def repair_quarterly_grid(
         len(request.feasibility_report.strip_findings),
     )
     payload = _invoke_json(
-        build_grid_repair_prompt(request), max_tokens=2000, temperature=0.2
+        build_grid_repair_prompt(request), max_tokens=4096, temperature=0.2
     )
 
     revised_strips = _parse_strips_preserving_ids(

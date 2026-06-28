@@ -194,6 +194,35 @@ async def test_propose_quarterly_grid_runs_two_passes(_mock_llm):
     assert {s.daypart for s in grid.strips} == {"daytime", "prime", "overnight"}
 
 
+def test_invoke_json_truncation_raises_actionable_error(monkeypatch):
+    """A length-limit truncation surfaces a clear ValueError, not a raw 500."""
+    from openai import LengthFinishReasonError
+    from openai.types.chat import ChatCompletion
+
+    truncated = ChatCompletion(
+        id="x",
+        model="m",
+        object="chat.completion",
+        created=0,
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "length",
+                "message": {"role": "assistant", "content": '{"blo'},
+            }
+        ],
+    )
+
+    class _TruncatingLLM:
+        def invoke(self, messages, **kwargs):
+            raise LengthFinishReasonError(completion=truncated)
+
+    monkeypatch.setattr(qg, "get_chat_model", lambda *a, **k: _TruncatingLLM())
+
+    with pytest.raises(ValueError, match="completion budget"):
+        qg._invoke_json([{"role": "user", "content": "x"}], max_tokens=4096, temperature=0.3)
+
+
 async def test_repair_preserves_unflagged_strips(_mock_llm, monkeypatch):
     current = Grid(
         channel="Classic Comedy",
