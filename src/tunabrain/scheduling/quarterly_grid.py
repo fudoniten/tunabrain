@@ -27,6 +27,7 @@ from tunabrain.api.models import (
     QuarterlyGridRepairRequest,
     QuarterlyGridRequest,
 )
+from tunabrain.config import get_settings
 from tunabrain.llm import LLMTask, get_chat_model
 from tunabrain.scheduling.grid import (
     CatalogProfile,
@@ -45,16 +46,31 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def summarize_catalog_profile(profile: CatalogProfile, max_shows: int = 40) -> str:
-    """Render the catalog *shape* compactly for a prompt (never raw media)."""
+def summarize_catalog_profile(
+    profile: CatalogProfile,
+    max_shows: int = 40,
+    *,
+    min_available_episodes: int = 1,
+) -> str:
+    """Render the catalog *shape* compactly for a prompt (never raw media).
+
+    Shows with fewer than ``min_available_episodes`` available episodes are
+    omitted from the per-show list: they cannot be stripped into a schedule, so
+    listing them only burns prompt budget and tempts the model to plan blocks it
+    can't fill. Genres with no available episodes are pruned for the same reason.
+    The remaining schedulable shows are listed highest-volume first up to
+    ``max_shows``; any further tail is acknowledged with a count for honesty.
+    """
     lines: list[str] = []
 
     if profile.genres:
         genre_bits = [
             f"{g.genre} ({g.show_count} shows / {g.episode_count} eps)"
             for g in sorted(profile.genres, key=lambda g: g.episode_count, reverse=True)
+            if g.episode_count > 0
         ]
-        lines.append("Genres: " + ", ".join(genre_bits))
+        if genre_bits:
+            lines.append("Genres: " + ", ".join(genre_bits))
 
     if profile.runtime_histogram:
         rt_bits = [f"{b.label}: {b.item_count}" for b in profile.runtime_histogram]
@@ -63,19 +79,27 @@ def summarize_catalog_profile(profile: CatalogProfile, max_shows: int = 40) -> s
     if profile.movie_count:
         lines.append(f"Movies available: {profile.movie_count}")
 
+    schedulable = sorted(
+        (s for s in profile.shows if s.available_episode_count >= min_available_episodes),
+        key=lambda s: s.available_episode_count,
+        reverse=True,
+    )
+    dropped_unschedulable = len(profile.shows) - len(schedulable)
+
     lines.append("")
     lines.append("Shows (media_id | available eps | avg runtime | genres):")
-    top_shows = sorted(
-        profile.shows, key=lambda s: s.available_episode_count, reverse=True
-    )[:max_shows]
-    for s in top_shows:
+    for s in schedulable[:max_shows]:
         runtime = f"~{round(s.avg_runtime_minutes)}min" if s.avg_runtime_minutes else "?min"
         genres = ",".join(s.genres) if s.genres else "-"
         lines.append(
             f"  - {s.title} ({s.media_id}) | {s.available_episode_count} eps | {runtime} | {genres}"
         )
-    if len(profile.shows) > max_shows:
-        lines.append(f"  ... and {len(profile.shows) - max_shows} more shows")
+    if len(schedulable) > max_shows:
+        lines.append(f"  ... and {len(schedulable) - max_shows} more schedulable shows")
+    if dropped_unschedulable > 0:
+        lines.append(
+            f"  ({dropped_unschedulable} further shows have no available episodes and are omitted)"
+        )
 
     return "\n".join(lines)
 
@@ -120,7 +144,7 @@ Channel purpose: {request.channel.description}
 Broadcast day starts at {request.broadcast_day_start}.{theme}{guidance}
 
 AVAILABLE MEDIA (shape only):
-{summarize_catalog_profile(request.catalog_profile)}
+{summarize_catalog_profile(request.catalog_profile, max_shows=get_settings().schedule_max_shows)}
 
 Produce 4-5 contiguous dayparts covering the whole broadcast day."""
 
@@ -182,7 +206,7 @@ DAYPART TO FILL:
 {prior}
 
 AVAILABLE MEDIA (shape only):
-{summarize_catalog_profile(request.catalog_profile)}
+{summarize_catalog_profile(request.catalog_profile, max_shows=get_settings().schedule_max_shows)}
 
 Fill this daypart with recurring strips that realize its role."""
 
@@ -246,7 +270,7 @@ FEASIBILITY FINDINGS TO FIX:
 {problem_block}
 
 AVAILABLE MEDIA (shape only):
-{summarize_catalog_profile(request.catalog_profile)}
+{summarize_catalog_profile(request.catalog_profile, max_shows=get_settings().schedule_max_shows)}
 
 Return the full corrected strip list, changing only what the findings require."""
 

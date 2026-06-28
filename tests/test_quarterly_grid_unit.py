@@ -76,6 +76,32 @@ def test_summarize_profile_includes_shows_and_genres():
     assert "22min" in text  # avg runtime rounded
 
 
+def test_summarize_profile_omits_unschedulable_shows():
+    profile = _profile()
+    profile.shows.append(
+        ShowProfile(
+            media_id="series:noeps",
+            title="Cancelled Pilot",
+            genres=["drama"],
+            episode_count=12,
+            available_episode_count=0,  # nothing to air -> must be pruned
+            avg_runtime_minutes=45,
+        )
+    )
+    text = qg.summarize_catalog_profile(profile)
+    assert "series:noeps" not in text  # dropped from the per-show list
+    assert "1 further shows have no available episodes" in text  # but acknowledged
+    assert "series:seinfeld" in text  # schedulable shows still listed
+
+
+def test_summarize_profile_respects_max_shows_over_schedulable_only():
+    text = qg.summarize_catalog_profile(_profile(), max_shows=1)
+    # Cheers has more available eps than Seinfeld, so it leads; the tail count
+    # reflects schedulable shows, not the raw catalog size.
+    assert "series:cheers" in text
+    assert "and 1 more schedulable shows" in text
+
+
 def test_skeleton_prompt_construction():
     messages = qg.build_daypart_skeleton_prompt(_request())
     assert len(messages) == 2

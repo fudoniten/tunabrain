@@ -31,6 +31,12 @@ class Settings:
     episode_llm_model: str | None = None     # Lightweight episode special flags
     schedule_llm_model: str | None = None    # Schedule building
 
+    # Max number of (schedulable) shows to enumerate in scheduling prompts. The
+    # catalog shape is always summarized; this caps the per-show detail list so a
+    # large library stays within a sensible prompt size. Long-context models
+    # (e.g. Claude Opus) can afford a high value.
+    schedule_max_shows: int = 300
+
 
 def _env_flag(name: str, default: bool = False) -> bool:
     """Return a boolean flag controlled by an environment variable."""
@@ -55,6 +61,7 @@ def get_settings() -> Settings:
         show_llm_model=os.getenv("TUNABRAIN_SHOW_LLM_MODEL"),
         episode_llm_model=os.getenv("TUNABRAIN_EPISODE_LLM_MODEL"),
         schedule_llm_model=os.getenv("TUNABRAIN_SCHEDULE_LLM_MODEL"),
+        schedule_max_shows=int(os.getenv("TUNABRAIN_SCHEDULE_MAX_SHOWS", "300")),
     )
     logger.info(
         "Loaded settings: provider=%s model=%s (shows=%s episodes=%s schedule=%s) debug=%s", 
