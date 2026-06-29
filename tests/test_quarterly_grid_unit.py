@@ -281,6 +281,58 @@ def test_invoke_json_truncation_raises_actionable_error(monkeypatch):
         qg._invoke_json([{"role": "user", "content": "x"}], max_tokens=4096, temperature=0.3)
 
 
+class _Reply:
+    def __init__(self, content: str):
+        self.content = content
+
+
+class _ScriptedLLM:
+    """Returns a queued reply per ``invoke`` call, tracking how many were made."""
+
+    def __init__(self, *contents: str):
+        self._replies = list(contents)
+        self.calls = 0
+
+    def invoke(self, messages, **kwargs):
+        self.calls += 1
+        return _Reply(self._replies.pop(0))
+
+
+def test_strip_code_fences_unwraps_json_block():
+    fenced = '```json\n{"strips": []}\n```'
+    assert json.loads(qg._strip_code_fences(fenced)) == {"strips": []}
+    # Bare JSON passes through untouched.
+    assert qg._strip_code_fences('{"a": 1}') == '{"a": 1}'
+
+
+def test_invoke_json_strips_markdown_fence(monkeypatch):
+    """A model that ignores json_object and fences its output still parses."""
+    llm = _ScriptedLLM('```json\n{"blocks": []}\n```')
+    monkeypatch.setattr(qg, "get_chat_model", lambda *a, **k: llm)
+
+    assert qg._invoke_json([], max_tokens=4096, temperature=0.3) == {"blocks": []}
+    assert llm.calls == 1
+
+
+def test_invoke_json_retries_then_succeeds(monkeypatch):
+    """A transient bad-JSON response is re-rolled rather than failing the request."""
+    llm = _ScriptedLLM("not json at all", '{"blocks": [1]}')
+    monkeypatch.setattr(qg, "get_chat_model", lambda *a, **k: llm)
+
+    assert qg._invoke_json([], max_tokens=4096, temperature=0.3) == {"blocks": [1]}
+    assert llm.calls == 2
+
+
+def test_invoke_json_raises_after_exhausting_retries(monkeypatch):
+    """Persistent bad JSON surfaces a clear error after the attempt cap."""
+    llm = _ScriptedLLM(*(["garbage"] * qg._MAX_JSON_ATTEMPTS))
+    monkeypatch.setattr(qg, "get_chat_model", lambda *a, **k: llm)
+
+    with pytest.raises(ValueError, match="invalid JSON after"):
+        qg._invoke_json([], max_tokens=4096, temperature=0.3)
+    assert llm.calls == qg._MAX_JSON_ATTEMPTS
+
+
 async def test_repair_preserves_unflagged_strips(_mock_llm, monkeypatch):
     current = Grid(
         channel="Classic Comedy",
