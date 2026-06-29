@@ -395,7 +395,7 @@ async def propose_quarterly_grid(
     # for reasoning models to "think" before emitting JSON, hence well above the
     # few hundred tokens the skeleton itself needs.
     skeleton_payload = _invoke_json(
-        build_daypart_skeleton_prompt(request), max_tokens=4096, temperature=0.3
+        build_daypart_skeleton_prompt(request), max_tokens=10000, temperature=0.3
     )
     skeleton = _parse_skeleton(request.channel.name, skeleton_payload)
     logger.info("Dayparting produced %s blocks", len(skeleton.blocks))
@@ -406,7 +406,7 @@ async def propose_quarterly_grid(
     for block in skeleton.blocks:
         payload = _invoke_json(
             build_strip_fill_prompt(request, block, all_strips),
-            max_tokens=4096,
+            max_tokens=10000,
             temperature=0.4,
         )
         llm_calls += 1
@@ -448,7 +448,7 @@ async def repair_quarterly_grid(
         len(request.feasibility_report.strip_findings),
     )
     payload = _invoke_json(
-        build_grid_repair_prompt(request), max_tokens=4096, temperature=0.2
+        build_grid_repair_prompt(request), max_tokens=10000, temperature=0.2
     )
 
     revised_strips = _parse_strips_preserving_ids(
