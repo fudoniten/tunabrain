@@ -305,6 +305,35 @@ Return the full corrected strip list, changing only what the findings require.""
 # ---------------------------------------------------------------------------
 
 
+# A malformed-JSON response is usually transient at temperature > 0 (a markdown
+# fence, a stray token, a dropped brace), so a re-roll typically succeeds. Cap
+# the attempts so a model that *consistently* fails still surfaces an error
+# rather than looping forever.
+_MAX_JSON_ATTEMPTS = 3
+
+
+def _strip_code_fences(content: str) -> str:
+    """Unwrap a Markdown code fence the model may have added around its JSON.
+
+    Despite ``response_format={"type": "json_object"}``, some models routed via
+    OpenRouter (e.g. ``minimax-m3``) return the object inside a ```` ```json ````
+    fence. That leading backtick makes ``json.loads`` fail at "line 1 column 1",
+    so peel the fence off before parsing. Text without a fence is returned
+    unchanged.
+    """
+    text = content.strip()
+    if not text.startswith("```"):
+        return content
+    lines = text.splitlines()
+    # Drop the opening fence line (``` or ```json) ...
+    if lines and lines[0].startswith("```"):
+        lines = lines[1:]
+    # ... and the closing fence if present.
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines)
+
+
 def _invoke_json(messages: list[dict], *, max_tokens: int, temperature: float) -> dict:
     """Invoke the scheduling LLM and parse a JSON object response.
 
@@ -314,32 +343,52 @@ def _invoke_json(messages: list[dict], *, max_tokens: int, temperature: float) -
     OpenAI structured-output path raises ``LengthFinishReasonError`` rather than
     returning partial content. Catch it and surface an actionable message
     instead of letting it bubble up as an opaque 500.
+
+    Malformed-but-complete JSON (markdown fences, stray tokens) is retried up to
+    ``_MAX_JSON_ATTEMPTS`` times - re-rolling at temperature > 0 usually yields
+    parseable output. A budget truncation is *not* retried, since a re-roll hits
+    the same ceiling.
     """
     llm = get_chat_model(LLMTask.SCHEDULING)
-    try:
-        response = llm.invoke(
-            messages,
-            response_format={"type": "json_object"},
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-    except LengthFinishReasonError as e:
-        logger.error(
-            "LLM response truncated at the %d-token completion limit before valid "
-            "JSON was produced (reasoning models consume part of this budget on "
-            "hidden reasoning tokens).",
-            max_tokens,
-        )
-        raise ValueError(
-            f"LLM response hit the {max_tokens}-token completion budget before "
-            "returning valid JSON. Raise the scheduling token budget or select a "
-            "model that spends fewer reasoning tokens."
-        ) from e
-    try:
-        return json.loads(response.content)
-    except json.JSONDecodeError as e:
-        logger.error("LLM returned invalid JSON: %s; body: %s", e, response.content[:500])
-        raise ValueError(f"LLM returned invalid JSON: {e}") from e
+    last_error: json.JSONDecodeError | None = None
+    for attempt in range(1, _MAX_JSON_ATTEMPTS + 1):
+        try:
+            response = llm.invoke(
+                messages,
+                response_format={"type": "json_object"},
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        except LengthFinishReasonError as e:
+            logger.error(
+                "LLM response truncated at the %d-token completion limit before valid "
+                "JSON was produced (reasoning models consume part of this budget on "
+                "hidden reasoning tokens).",
+                max_tokens,
+            )
+            raise ValueError(
+                f"LLM response hit the {max_tokens}-token completion budget before "
+                "returning valid JSON. Raise the scheduling token budget or select a "
+                "model that spends fewer reasoning tokens."
+            ) from e
+        try:
+            return json.loads(_strip_code_fences(response.content))
+        except json.JSONDecodeError as e:
+            last_error = e
+            logger.warning(
+                "LLM returned invalid JSON (attempt %d/%d): %s; body: %s",
+                attempt,
+                _MAX_JSON_ATTEMPTS,
+                e,
+                response.content[:500],
+            )
+
+    logger.error(
+        "LLM returned invalid JSON after %d attempts: %s", _MAX_JSON_ATTEMPTS, last_error
+    )
+    raise ValueError(
+        f"LLM returned invalid JSON after {_MAX_JSON_ATTEMPTS} attempts: {last_error}"
+    )
 
 
 def _parse_skeleton(channel: str, payload: dict) -> DaypartSkeleton:
