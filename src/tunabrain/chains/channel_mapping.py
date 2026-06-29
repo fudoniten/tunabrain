@@ -23,7 +23,12 @@ _MAX_VALIDATION_RETRIES = 2
 
 
 class ChannelMappingResult(BaseModel):
-    """Structured response capturing LLM channel selections."""
+    """DEPRECATED: Hardcoded channel mapping result. Not dimension-aware.
+
+    Channels are a dimension now. Use /categorize with a "channel" dimension
+    which returns DimensionSelection instead.
+    See TS DIMENSION_CLEANUP.md for the full migration plan.
+    """
 
     mappings: list[ChannelMapping] = Field(
         description="Chosen channels with human-readable justification.",
@@ -154,7 +159,14 @@ async def map_media_to_channels(
     debug: bool = False,
     llm: RunnableSerializable | None = None,
 ) -> list[ChannelMapping]:
-    """Map a media item to channels using the LLM's broader context and reasoning."""
+    """DEPRECATED: Hardcoded channel mapping. Not dimension-aware.
+
+    This function asks the LLM to pick from a fixed list of Channel objects,
+    reading media.genres (a hardcoded field). In the dimension model,
+    channels are just one dimension among many, returned by /categorize.
+
+    See TS DIMENSION_CLEANUP.md for the full migration plan.
+    """
 
     if not channels:
         return []

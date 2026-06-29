@@ -18,21 +18,21 @@ logger = logging.getLogger(__name__)
 
 
 class TaggingResult(BaseModel):
-    """Structured response capturing the final tag set."""
+    """Free-form tag result."""
 
     tags: list[str] = Field(
-        description="Scheduling-friendly tags after reviewing current and existing taxonomy"
+        description="Free-form tags after reviewing current and existing taxonomy"
     )
 
 
 async def generate_tags(
     media: MediaItem, existing_tags: list[str] | None = None, *, debug: bool = False, task=None
 ) -> list[str]:
-    """Generate scheduling-friendly tags for the provided media item.
+    """Generate free-form tags for the provided media item.
 
     This function should orchestrate LangChain components to build a set of
     concise tags that help place the media into thematic schedules.
-    
+
     Args:
         media: The media item to tag
         existing_tags: Existing tags to reuse when available
@@ -43,9 +43,14 @@ async def generate_tags(
     # Infer task from media type if not specified
     if task is None:
         from tunabrain.llm import LLMTask
+
         task = LLMTask.EPISODE_FLAGGING if media.is_episode else LLMTask.SHOW_TAGGING
-    
-    logger.info("Generating tags for '%s' (task=%s)", media.title, task.value if hasattr(task, 'value') else task)
+
+    logger.info(
+        "Generating tags for '%s' (task=%s)",
+        media.title,
+        task.value if hasattr(task, "value") else task,
+    )
     debug_enabled = is_debug_enabled(debug)
 
     llm = get_chat_model(task=task)  # Use task-specific model
