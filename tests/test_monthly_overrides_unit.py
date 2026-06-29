@@ -15,6 +15,7 @@ from tunabrain.scheduling.grid import (
     Content,
     Grid,
     GridStrip,
+    OverrideScope,
     ShowProfile,
 )
 
@@ -152,6 +153,60 @@ def test_invalid_scope_skipped():
     overrides, warnings = mo._parse_overrides("C", "2026-01", payload)
     assert overrides == []
     assert warnings
+
+
+# --- wire serialization: closed-union scope must carry no null siblings ------
+
+
+def test_dated_scope_serializes_without_null_siblings():
+    """A single-date scope must wire as exactly {"date": ...} — the inapplicable
+    days/effective_* keys must not appear at all (the scheduler's OverrideScope
+    is a closed union and rejects stray nulls)."""
+    scope = OverrideScope(date="2026-06-05")
+    assert scope.model_dump() == {"date": "2026-06-05"}
+    assert json.loads(scope.model_dump_json()) == {"date": "2026-06-05"}
+
+
+def test_recurring_scope_serializes_only_set_effective_bounds():
+    """A days-scope keeps its discriminator plus only whichever effective_*
+    bounds are actually set; an unset effective_end must drop out, not null."""
+    scope = OverrideScope(days=["fri"], effective_start="2026-06-01")
+    assert scope.model_dump() == {"days": ["fri"], "effective_start": "2026-06-01"}
+    both = OverrideScope(
+        days="weekends", effective_start="2026-06-01", effective_end="2026-06-30"
+    )
+    assert both.model_dump() == {
+        "days": "weekends",
+        "effective_start": "2026-06-01",
+        "effective_end": "2026-06-30",
+    }
+
+
+def test_scope_with_both_date_and_days_is_invalid():
+    """Genuine ambiguity stays a hard error — dropping nulls must not paper it over."""
+    with pytest.raises(ValueError):
+        OverrideScope(date="2026-06-05", days=["fri"])
+
+
+def test_proposed_overrides_carry_no_null_scope_keys():
+    """End-to-end: every scope object in proposed overrides has no null values."""
+    first_day, last_day = mo.month_bounds("2026-01")
+    payload = {
+        "overrides": [
+            {"scope": {"date": "2026-01-10"}, "start": "10:00", "end": "22:00", "media_id": "x"},
+            {"scope": {"days": ["fri"]}, "start": "19:00", "end": "21:00", "media_id": "y"},
+        ]
+    }
+    overrides, _ = mo._parse_overrides("Classic Comedy", "2026-01", payload)
+    dumped_scopes = [ov.model_dump()["scope"] for ov in overrides]
+    assert dumped_scopes[0] == {"date": "2026-01-10"}
+    assert dumped_scopes[1] == {
+        "days": ["fri"],
+        "effective_start": first_day.isoformat(),
+        "effective_end": last_day.isoformat(),
+    }
+    for scope in dumped_scopes:
+        assert None not in scope.values()
 
 
 # --- orchestration + end-to-end through the expander ------------------------
