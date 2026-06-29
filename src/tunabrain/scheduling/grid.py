@@ -25,9 +25,37 @@ See ``docs/scheduling-grid-spec.md`` for the precedence/expansion algorithm.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_serializer, model_validator
+
+# ---------------------------------------------------------------------------
+# Wire-contract base model
+# ---------------------------------------------------------------------------
+
+
+class _WireModel(BaseModel):
+    """Base for every model that crosses the Tunabrain -> Tunarr boundary.
+
+    Serialization omits any key whose value is ``None`` so the JSON carries only
+    the fields that actually apply. This matters most for ``OverrideScope``,
+    which the scheduler models as a *closed* discriminated union: a single-date
+    scope that also serialized ``days``/``effective_*`` as explicit ``null``
+    would be rejected as carrying disallowed keys. Dropping nulls keeps each
+    payload matching exactly one branch of that union, and the same discipline
+    keeps every other optional-heavy contract (``Content.label``, grid strips,
+    ...) free of stray ``null`` siblings.
+
+    We drop ``None`` specifically (equivalent to ``exclude_none=True``), not
+    unset fields: a field that is legitimately *set to* ``None`` (e.g. an
+    optional ``effective_end``) should still vanish from the wire rather than
+    reappear as ``null``.
+    """
+
+    @model_serializer(mode="wrap")
+    def _drop_none(self, handler: Any) -> dict[str, Any]:
+        return {key: value for key, value in handler(self).items() if value is not None}
+
 
 # ---------------------------------------------------------------------------
 # Shared vocabulary
@@ -48,7 +76,7 @@ SelectionStrategy = Literal["random", "sequential", "specific"]
 grid, but the fill (which episode) may still rotate at air time."""
 
 
-class Content(BaseModel):
+class Content(_WireModel):
     """What airs in a slot. Maps directly onto fields of ``DailySlot``.
 
     ``media_id`` follows the existing convention: ``"series:<id>"``,
@@ -83,7 +111,7 @@ class Content(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class ShowProfile(BaseModel):
+class ShowProfile(_WireModel):
     """Per-show rollup. The unit the LLM authors strips against."""
 
     media_id: str = Field(..., description="e.g. 'series:seinfeld'")
@@ -99,7 +127,7 @@ class ShowProfile(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
-class GenreProfile(BaseModel):
+class GenreProfile(_WireModel):
     """Per-genre rollup, for high-level dayparting decisions."""
 
     genre: str
@@ -107,7 +135,7 @@ class GenreProfile(BaseModel):
     episode_count: int = Field(..., ge=0)
 
 
-class RuntimeBucket(BaseModel):
+class RuntimeBucket(_WireModel):
     """One bar of the runtime histogram (helps fit content to slot lengths)."""
 
     label: str = Field(..., description="e.g. '20-30min'")
@@ -116,7 +144,7 @@ class RuntimeBucket(BaseModel):
     item_count: int = Field(..., ge=0)
 
 
-class CatalogProfile(BaseModel):
+class CatalogProfile(_WireModel):
     """The *shape* of the library — never the library itself.
 
     Built deterministically by Tunarr Scheduler from Pseudovision aggregates.
@@ -143,7 +171,7 @@ class CatalogProfile(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class GridStrip(BaseModel):
+class GridStrip(_WireModel):
     """One recurring strip in the frozen weekly grid.
 
     A strip is a *rule*, not a dated slot: "weekdays 17:00-18:00 -> Seinfeld"
@@ -165,7 +193,7 @@ class GridStrip(BaseModel):
     )
 
 
-class DaypartBlock(BaseModel):
+class DaypartBlock(_WireModel):
     """A coarse block of the broadcast day with an assigned programming role.
 
     Output of Pass A (dayparting). Strips (Pass B) are filled *within* a block's
@@ -180,14 +208,14 @@ class DaypartBlock(BaseModel):
     rationale: str | None = None
 
 
-class DaypartSkeleton(BaseModel):
+class DaypartSkeleton(_WireModel):
     """The coherence-bearing top-level frame for one channel's grid (Pass A)."""
 
     channel: str
     blocks: list[DaypartBlock] = Field(default_factory=list)
 
 
-class Grid(BaseModel):
+class Grid(_WireModel):
     """A channel's complete frozen weekly grid (the base layer).
 
     Authored once (per quarter) and then immutable. Everything that varies
@@ -215,7 +243,7 @@ class Grid(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class OverrideScope(BaseModel):
+class OverrideScope(_WireModel):
     """When an override applies. Exactly one of ``date`` or ``days`` must be set.
 
     - ``date``: a single calendar day ("2026-01-10") — most specific.
@@ -243,7 +271,7 @@ class OverrideScope(BaseModel):
         return self
 
 
-class Override(BaseModel):
+class Override(_WireModel):
     """A sparse, higher-precedence exception layered over the frozen grid.
 
     The monthly layer emits these as *deltas* — "Sat the 10th: Cheers marathon",
@@ -269,7 +297,7 @@ class Override(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class StripFeasibility(BaseModel):
+class StripFeasibility(_WireModel):
     """Capacity finding for one strip/override over the planning horizon."""
 
     rule_id: str = Field(..., description="strip_id or override_id this finding refers to")
@@ -287,7 +315,7 @@ class StripFeasibility(BaseModel):
     message: str = Field(default="")
 
 
-class FeasibilityReport(BaseModel):
+class FeasibilityReport(_WireModel):
     """Deterministic validation feedback. Replaces the heuristic length-checks of
     the old monthly loop with real arithmetic the LLM can act on."""
 
