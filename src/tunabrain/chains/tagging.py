@@ -9,15 +9,14 @@ from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from pydantic import BaseModel, Field
 
-from tunabrain.api.models import MediaItem
+from tunabrain.api.models import MediaContext, MediaItem
+from tunabrain.chains.context import resolve_media_context
 from tunabrain.chains.validation import (
     format_kebab_feedback,
     partition_kebab_case,
 )
 from tunabrain.config import is_debug_enabled
 from tunabrain.llm import get_chat_model
-from tunabrain.tools.wikipedia import WikipediaLookup
-
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +47,13 @@ _KEBAB_CASE_INSTRUCTION = (
 
 
 async def generate_tags(
-    media: MediaItem, existing_tags: list[str] | None = None, *, debug: bool = False, task=None
-) -> list[str]:
+    media: MediaItem,
+    existing_tags: list[str] | None = None,
+    *,
+    debug: bool = False,
+    task=None,
+    context: MediaContext | None = None,
+) -> tuple[list[str], MediaContext]:
     """Generate free-form tags for the provided media item.
 
     This function should orchestrate LangChain components to build a set of
@@ -60,6 +64,12 @@ async def generate_tags(
         existing_tags: Existing tags to reuse when available
         debug: Enable debug logging
         task: LLMTask enum for task-specific model selection (default: inferred from media.is_episode)
+        context: Optional grounding context to override the Wikipedia auto-search
+
+    Returns:
+        A ``(tags, resolved_context)`` tuple. The resolved context echoes back
+        the reference (e.g. Wikipedia page) that grounded the tags so the caller
+        can store and correct it.
     """
 
     # Infer task from media type if not specified
@@ -76,19 +86,11 @@ async def generate_tags(
     debug_enabled = is_debug_enabled(debug)
 
     llm = get_chat_model(task=task)  # Use task-specific model
-    wikipedia = WikipediaLookup(debug=debug_enabled, llm=llm)
-    wikipedia_summary: str | None = None
-    try:
-        wikipedia_summary = await wikipedia.lookup_async(
-            name=media.title,
-            year=None,
-            imdb_id=getattr(media, "imdb_id", None),
-            llm=llm,
-        )
-    except Exception as exc:  # pragma: no cover - defensive catch for external service
-        logger.warning("Wikipedia lookup failed: %s", exc)
-
-    wikipedia_context = wikipedia_summary or "Wikipedia summary not available."
+    # Resolve the grounding context: a caller-supplied override (to correct a
+    # bad match) if present, otherwise the automatic Wikipedia search. The
+    # resolved context is echoed back so the caller can see and correct it.
+    resolved = await resolve_media_context(media, context, llm=llm, debug=debug_enabled)
+    wikipedia_context = resolved.grounding_text
 
     parser = PydanticOutputParser(pydantic_object=TaggingResult)
 
@@ -343,4 +345,4 @@ async def generate_tags(
         logger.debug("LLM response (final tags): %s", result.model_dump())
 
     logger.info("Generated %s tags for '%s'", len(result.tags), media.title)
-    return result.tags
+    return result.tags, resolved.output

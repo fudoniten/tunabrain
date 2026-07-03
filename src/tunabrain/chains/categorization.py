@@ -16,13 +16,14 @@ from tunabrain.api.models import (
     Channel,
     ChannelMapping,
     DimensionSelection,
+    MediaContext,
     MediaItem,
 )
 from tunabrain.chains.channel_mapping import map_media_to_channels
+from tunabrain.chains.context import resolve_media_context
 from tunabrain.chains.validation import format_invalid_feedback, partition_values
 from tunabrain.config import is_debug_enabled
 from tunabrain.llm import get_chat_model
-from tunabrain.tools.wikipedia import WikipediaLookup
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,10 @@ class CategorizationResult(BaseModel):
     channel_mappings: list[ChannelMapping] = Field(
         default_factory=list,
         description="Optional channel mapping suggestions when channels are provided",
+    )
+    context: MediaContext = Field(
+        default_factory=MediaContext,
+        description="The grounding context actually used, echoed back for storage and correction",
     )
 
 
@@ -256,6 +261,7 @@ async def categorize_media(
     *,
     debug: bool = False,
     llm: RunnableSerializable | None = None,
+    context: MediaContext | None = None,
 ) -> CategorizationResult:
     """Categorize media across caller-provided scheduling dimensions.
 
@@ -276,20 +282,14 @@ async def categorize_media(
         len(channels_list),
     )
 
-    # --- Wikipedia enrichment (shared across all category requests) ---
-    wikipedia = WikipediaLookup(debug=debug_enabled, llm=llm_instance)
-    wikipedia_summary = "Wikipedia summary not available."
-    try:
-        summary = await wikipedia.lookup_async(
-            name=media.title,
-            year=None,
-            imdb_id=getattr(media, "imdb_id", None),
-            llm=llm_instance,
-        )
-        if summary:
-            wikipedia_summary = summary
-    except Exception as exc:  # pragma: no cover - defensive catch for external service
-        logger.warning("Wikipedia lookup failed: %s", exc)
+    # --- Grounding context (shared across all category requests) ---
+    # A caller-supplied override (to correct a bad match) takes precedence;
+    # otherwise this runs the automatic Wikipedia search. The resolved context
+    # is echoed back on the result so the caller can see and correct it.
+    resolved = await resolve_media_context(
+        media, context, llm=llm_instance, debug=debug_enabled
+    )
+    wikipedia_summary = resolved.grounding_text
 
     # --- Per-category LLM calls (concurrent) ---
     if categories:
@@ -324,6 +324,7 @@ async def categorize_media(
     result = CategorizationResult(
         dimensions=dimensions,
         channel_mappings=channel_mappings,
+        context=resolved.output,
     )
 
     logger.info(

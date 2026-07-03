@@ -5,10 +5,12 @@ from tunabrain.api.models import (
     CategoryDefinition,
     CategoryValue,
     Channel,
+    MediaContext,
     MediaItem,
 )
 from tunabrain.chains.categorization import _categorize_single, _categorize_single_safe
 from tunabrain.chains.channel_mapping import map_media_to_channels
+from tunabrain.chains.context import ResolvedContext
 from tunabrain.chains.tagging import generate_tags
 from tunabrain.chains.validation import (
     format_invalid_feedback,
@@ -33,18 +35,17 @@ class RecordingLLM:
         return AIMessage(content=self._responses.pop(0))
 
 
-class StubWikipedia:
-    """Stub WikipediaLookup whose ``lookup_async`` returns a canned summary.
+async def _stub_resolve(media, context=None, *, llm=None, debug=False):
+    """Stub for ``resolve_media_context`` used by ``generate_tags`` tests.
 
-    The real ``WikipediaLookup`` hits Wikipedia + the LLM, which we don't want
-    in unit tests.  ``generate_tags`` tolerates a failure here (it logs and
-    falls back to a placeholder summary), so an empty string is fine — but a
-    short fixed summary keeps the human-prompt template populated and matches
-    the production happy-path shape.
+    The real resolver hits Wikipedia + the LLM, which we don't want in unit
+    tests.  A short fixed summary keeps the human-prompt template populated and
+    matches the production happy-path shape.
     """
-
-    async def lookup_async(self, *args, **kwargs):
-        return "Test Wikipedia summary."
+    return ResolvedContext(
+        "Test Wikipedia summary.",
+        MediaContext(summary="Test Wikipedia summary.", source="wikipedia"),
+    )
 
 
 def _media() -> MediaItem:
@@ -278,10 +279,10 @@ async def test_generate_tags_reprompts_then_accepts_kebab_case(monkeypatch):
         "tunabrain.chains.tagging.get_chat_model", lambda task=None: llm
     )
     monkeypatch.setattr(
-        "tunabrain.chains.tagging.WikipediaLookup", lambda debug, llm: StubWikipedia()
+        "tunabrain.chains.tagging.resolve_media_context", _stub_resolve
     )
 
-    result = await generate_tags(media, existing_tags=None)
+    result, _ctx = await generate_tags(media, existing_tags=None)
 
     assert result == ["action-and-adventure", "documentary", "sci-fi"]
     # The LLM was re-prompted with feedback about the non-kebab-case tags.
@@ -307,10 +308,10 @@ async def test_generate_tags_drops_non_kebab_case_when_uncorrected(monkeypatch):
         "tunabrain.chains.tagging.get_chat_model", lambda task=None: llm
     )
     monkeypatch.setattr(
-        "tunabrain.chains.tagging.WikipediaLookup", lambda debug, llm: StubWikipedia()
+        "tunabrain.chains.tagging.resolve_media_context", _stub_resolve
     )
 
-    result = await generate_tags(media, existing_tags=None)
+    result, _ctx = await generate_tags(media, existing_tags=None)
 
     # Invalid tags are dropped; the one valid tag is retained.
     assert result == ["sci-fi"]
@@ -329,10 +330,10 @@ async def test_generate_tags_keeps_kebab_case_on_first_try(monkeypatch):
         "tunabrain.chains.tagging.get_chat_model", lambda task=None: llm
     )
     monkeypatch.setattr(
-        "tunabrain.chains.tagging.WikipediaLookup", lambda debug, llm: StubWikipedia()
+        "tunabrain.chains.tagging.resolve_media_context", _stub_resolve
     )
 
-    result = await generate_tags(media, existing_tags=None)
+    result, _ctx = await generate_tags(media, existing_tags=None)
 
     assert result == ["action-and-adventure", "documentary", "sci-fi"]
     # No retries needed.
@@ -350,7 +351,7 @@ async def test_generate_tags_prompt_includes_kebab_case_instruction(monkeypatch)
         "tunabrain.chains.tagging.get_chat_model", lambda task=None: llm
     )
     monkeypatch.setattr(
-        "tunabrain.chains.tagging.WikipediaLookup", lambda debug, llm: StubWikipedia()
+        "tunabrain.chains.tagging.resolve_media_context", _stub_resolve
     )
 
     await generate_tags(media, existing_tags=None)
@@ -384,10 +385,10 @@ async def test_generate_tags_drops_non_kebab_case_via_existing_tags(monkeypatch)
         "tunabrain.chains.tagging.get_chat_model", lambda task=None: llm
     )
     monkeypatch.setattr(
-        "tunabrain.chains.tagging.WikipediaLookup", lambda debug, llm: StubWikipedia()
+        "tunabrain.chains.tagging.resolve_media_context", _stub_resolve
     )
 
-    result = await generate_tags(
+    result, _ctx = await generate_tags(
         media, existing_tags=["Action & Adventure", "Documentary", "sci-fi"]
     )
 
