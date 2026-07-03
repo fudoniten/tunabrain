@@ -227,7 +227,22 @@ def fill_time_slot(
         date: ISO date string (e.g., "2026-02-01")
         start_time: Time string in HH:MM format (e.g., "08:00")
         end_time: Time string in HH:MM format (e.g., "09:00")
-        media_id: Media identifier (e.g., "series:friends", "movie:the-matrix", "random:sitcom")
+        media_id: Media identifier. Use ``series:<id>`` or ``movie:<id>``
+            for a specific item, or ``random:<kebab-case-genre>`` to draw
+            from a genre pool. The genre token **MUST** be kebab-case to
+            match the canonical tag storage in Pseudovision — examples:
+            ``"random:comedy"``, ``"random:sci-fi-and-fantasy"``,
+            ``"random:action-and-adventure"``.
+
+            **Do NOT use the human-readable form** (e.g. ``"random:Comedy"``,
+            ``"random:Sci-Fi & Fantasy"``, ``"random:Action & Adventure"``).
+            The human-readable form is what the catalog profile contains,
+            but it is NOT what storage indexes — it resolves to 0 items
+            at air-time and surfaces as ``No playable items found for
+            media_id random:<Human-Readable>`` errors. If the catalog
+            profile lists ``"Sci-Fi & Fantasy"``, emit
+            ``"random:sci-fi-and-fantasy"`` (lowercase, ``&`` -> ``and``,
+            spaces -> ``-``).
         selection_strategy: "random" | "sequential" | "specific" (default: "random")
         category_filters: Optional list of category tags (e.g., ["comedy", "sitcom"])
         notes: Optional notes for this slot
