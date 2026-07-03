@@ -4,11 +4,16 @@ import logging
 from collections.abc import Iterable
 
 from langchain_core.exceptions import OutputParserException
+from langchain_core.messages import HumanMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from pydantic import BaseModel, Field
 
 from tunabrain.api.models import MediaItem
+from tunabrain.chains.validation import (
+    format_kebab_feedback,
+    partition_kebab_case,
+)
 from tunabrain.config import is_debug_enabled
 from tunabrain.llm import get_chat_model
 from tunabrain.tools.wikipedia import WikipediaLookup
@@ -17,12 +22,29 @@ from tunabrain.tools.wikipedia import WikipediaLookup
 logger = logging.getLogger(__name__)
 
 
+# Number of times to re-prompt the LLM after it returns non-kebab-case tags
+# before giving up and filtering them out.  Mirrors _MAX_VALIDATION_RETRIES in
+# chains/categorization.py so the two chains behave consistently.
+_KEBAB_CASE_MAX_RETRIES = 2
+
+
 class TaggingResult(BaseModel):
     """Free-form tag result."""
 
     tags: list[str] = Field(
         description="Free-form tags after reviewing current and existing taxonomy"
     )
+
+
+# Shared instruction fragment appended to the system prompt of every free-form
+# tag generation call.  Echoed in the human message and in the retry feedback so
+# the model sees the format requirement up-front and on every re-prompt.
+_KEBAB_CASE_INSTRUCTION = (
+    "All tags MUST be in kebab-case format: lowercase words joined by single "
+    "hyphens (e.g. 'action-and-adventure', 'sci-fi', 'documentary'). Do not "
+    "use spaces, ampersands, capitals, or other special characters. Tags that "
+    "do not follow this format will be rejected."
+)
 
 
 async def generate_tags(
@@ -87,7 +109,8 @@ async def generate_tags(
                 "system",
                 "You are vetting tags for a media library. Only choose tags that accurately apply "
                 "to the media based on the provided metadata. Do not invent new tags; you may only "
-                "select from the candidates in this batch. Return a JSON list of applicable tags.",
+                "select from the candidates in this batch. Return a JSON list of applicable tags.\n\n"
+                f"{_KEBAB_CASE_INSTRUCTION}",
             ),
             (
                 "human",
@@ -150,7 +173,19 @@ async def generate_tags(
                 if tag not in selected:
                     selected.append(tag)
 
-        return selected
+        # Safety net: the batch prompt instructs kebab-case, but the LLM can
+        # still echo raw Jellyfin genre strings (e.g. "Action & Adventure") from
+        # the candidate set when one of those is the best fit.  Filter them out
+        # here so non-kebab-case values never feed the final prompt as
+        # "vetted existing tags".  We do not retry the batch (the candidates
+        # are fixed by the caller) — drop and move on.
+        valid, invalid = partition_kebab_case(selected)
+        if invalid:
+            logger.warning(
+                "Dropping non-kebab-case tag(s) from vetted-existing-tag set: %s",
+                invalid,
+            )
+        return valid
 
     vetted_existing_tags = await evaluate_tag_batches(existing_tags or [])
 
@@ -184,7 +219,8 @@ async def generate_tags(
                     "Prefer tags from the vetted existing list to avoid synonyms. "
                     "Keep 3-10 tags. Prioritise episode-specific vocabulary where applicable: "
                     f"{_EPISODE_VOCAB}. "
-                    "Remove tags that are inaccurate or not useful for scheduling decisions.",
+                    "Remove tags that are inaccurate or not useful for scheduling decisions.\n\n"
+                    f"{_KEBAB_CASE_INSTRUCTION}",
                 ),
                 MessagesPlaceholder(variable_name="chat_history", optional=True),
                 (
@@ -212,7 +248,8 @@ async def generate_tags(
                     "You are a scheduling assistant that assigns concise, reusable tags to media. "
                     "Prefer tags from the vetted existing list to avoid synonyms. "
                     "Keep 5-15 tags that describe genre, tone, audience, and programming value. "
-                    "Remove tags that are irrelevant to scheduling or inaccurate.",
+                    "Remove tags that are irrelevant to scheduling or inaccurate.\n\n"
+                    f"{_KEBAB_CASE_INSTRUCTION}",
                 ),
                 MessagesPlaceholder(variable_name="chat_history", optional=True),
                 (
@@ -246,16 +283,62 @@ async def generate_tags(
     }
     if media.is_episode:
         final_inputs["episode_label"] = episode_label
-    if debug_enabled:
-        logger.debug("LLM request (final tags): %s", final_inputs)
-    try:
-        result: TaggingResult = await invoke_prompt(prompt, final_inputs, parser)
-    except OutputParserException as exc:
-        logger.error(
-            "Failed to parse final tagging response. llm_output=%s",
-            getattr(exc, "llm_output", "<missing>"),
+
+    # Re-prompt the LLM whenever it returns tags that are not in kebab-case so
+    # it can re-format them.  After the retries are exhausted we filter below
+    # so a non-kebab-case value never propagates downstream.  Mirrors the
+    # option-set validation in chains/categorization._categorize_single.
+    messages = prompt.format_messages(**final_inputs)
+    result: TaggingResult | None = None
+    response = None
+    for attempt in range(_KEBAB_CASE_MAX_RETRIES + 1):
+        response = await llm.ainvoke(messages)
+        if debug_enabled:
+            logger.debug(
+                "LLM raw response (final tags, attempt %s): %s",
+                attempt + 1,
+                response,
+            )
+        try:
+            result = await parser.ainvoke(response)
+        except OutputParserException as exc:
+            logger.error(
+                "Failed to parse final tagging response (attempt %s). llm_output=%s",
+                attempt + 1,
+                getattr(exc, "llm_output", "<missing>"),
+            )
+            raise
+
+        valid, invalid = partition_kebab_case(result.tags)
+        if not invalid:
+            result.tags = valid
+            break
+
+        logger.warning(
+            "LLM returned non-kebab-case tag(s) (attempt %s): %s",
+            attempt + 1,
+            invalid,
         )
-        raise
+        if attempt < _KEBAB_CASE_MAX_RETRIES:
+            # Feed the rejected tags back so the model can re-format them.
+            messages = [
+                *messages,
+                response,
+                HumanMessage(content=format_kebab_feedback(invalid)),
+            ]
+
+    assert result is not None  # the loop always runs at least once
+
+    # Final safety net: never return tags outside kebab-case.
+    valid, invalid = partition_kebab_case(result.tags)
+    if invalid:
+        logger.warning(
+            "Dropping non-kebab-case tag(s) after %s attempt(s): %s",
+            _KEBAB_CASE_MAX_RETRIES + 1,
+            invalid,
+        )
+    result.tags = valid
+
     if debug_enabled:
         logger.debug("LLM response (final tags): %s", result.model_dump())
 
