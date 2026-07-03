@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import logging
+from urllib.parse import quote, unquote, urlparse
 
 import httpx
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 
 from tunabrain.llm import get_chat_model
-
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +16,38 @@ WIKIPEDIA_API = "https://api.wikimedia.org/core/v1/wikipedia/en/search/page"
 WIKIPEDIA_PAGE_EXTRACT_API = "https://en.wikipedia.org/w/api.php"
 WIKIPEDIA_USER_AGENT = "TunaBrain/0.1 (+https://github.com/tunarr-labs/tunabrain)"
 REQUEST_HEADERS = {"User-Agent": WIKIPEDIA_USER_AGENT}
+
+
+def page_url(title: str) -> str:
+    """Build the canonical en.wikipedia.org URL for a page title.
+
+    Accepts either a spaced ("Juice (1992 film)") or underscored
+    ("Juice_(1992_film)") title; the result is always the underscored,
+    percent-encoded article URL.
+    """
+    return "https://en.wikipedia.org/wiki/" + quote(title.replace(" ", "_"))
+
+
+def page_title_from_url(url: str) -> str | None:
+    """Extract a Wikipedia page title from a URL, or None if it isn't one.
+
+    Only recognises ``*.wikipedia.org/wiki/<title>`` links; every other URL
+    returns ``None`` so the caller can decide how to treat non-Wikipedia
+    references. Underscores are converted back to spaces and percent-encoding
+    is decoded so the title can be passed straight to the extract API.
+    """
+    try:
+        parsed = urlparse(url.strip())
+    except (ValueError, AttributeError):
+        return None
+    if "wikipedia.org" not in (parsed.netloc or ""):
+        return None
+    prefix = "/wiki/"
+    path = parsed.path or ""
+    if not path.startswith(prefix):
+        return None
+    title = unquote(path[len(prefix):]).replace("_", " ").strip()
+    return title or None
 
 
 def _schedule_summary_prompt() -> ChatPromptTemplate:
@@ -261,3 +293,43 @@ class WikipediaLookup:
 
         self._cache[cache_key] = summary
         return summary
+
+    async def summarize_title_async(
+        self, title: str, *, llm: BaseChatModel | None = None
+    ) -> tuple[str, str]:
+        """Fetch and summarize a specific Wikipedia page by title.
+
+        Unlike :meth:`lookup_async`, this skips the search step — the caller
+        already knows the exact page (e.g. from an operator-supplied link).
+        Returns ``(summary, page_url)`` so the resolved article is visible to
+        the caller.
+        """
+        article = await _fetch_full_article(title, debug=self.debug)
+        summary = await _summarize_article_async(
+            llm or self._llm or get_chat_model(),
+            title=title,
+            article=article,
+            debug=self.debug,
+        )
+        return summary, page_url(title)
+
+    async def resolve_async(
+        self,
+        *,
+        name: str,
+        year: int | None = None,
+        imdb_id: str | None = None,
+        llm: BaseChatModel | None = None,
+    ) -> tuple[str, str] | None:
+        """Search, fetch, and summarize — returning ``(summary, page_url)``.
+
+        This is the visibility-preserving variant of :meth:`lookup_async`: it
+        exposes *which* page the search matched so a bad match (the wrong
+        article for an ambiguous title) can be diagnosed downstream. Returns
+        ``None`` when the search finds no page rather than raising.
+        """
+        query = _build_search_query(name=name, year=year, imdb_id=imdb_id)
+        title = await _search_wikipedia(query, debug=self.debug)
+        if not title:
+            return None
+        return await self.summarize_title_async(title, llm=llm)

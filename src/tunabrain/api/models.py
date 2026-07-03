@@ -56,6 +56,63 @@ class Channel(BaseModel):
     description: str | None = None
 
 
+class MediaContext(BaseModel):
+    """Reference information that grounds a tagging/categorization request.
+
+    Tunabrain normally grounds tagging by auto-searching Wikipedia for the
+    media's title. That search can land on the wrong article (e.g. an ambiguous
+    title), and because the matched page was never surfaced, a bad match was
+    invisible — producing bad tags/categories with no way to diagnose them.
+
+    This model closes that loop in both directions:
+
+    - **On the request**, a caller may supply ``text``, ``summary``, or
+      ``links`` to override the auto-search. Any supplied grounding is used
+      instead of searching Wikipedia, so operators can correct a bad match.
+    - **On the response**, ``summary`` (the text actually fed to the model),
+      ``source`` (where it came from), and ``links`` (e.g. the Wikipedia page
+      the search matched) are always populated, so the grounding is visible.
+
+    Store the returned context in Tunarr Scheduler and edit it in a UI; sending
+    the corrected context back on the next request re-tags against the fix.
+    """
+
+    text: str | None = Field(
+        None,
+        description=(
+            "Free-form operator-supplied description or notes about the media. "
+            "When present (and no summary is given), it grounds the model "
+            "directly and the Wikipedia auto-search is skipped."
+        ),
+    )
+    links: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Reference URLs about the media. Wikipedia links are fetched and "
+            "summarized in place of the auto-search; other links are echoed "
+            "but not fetched. On a response this carries the page(s) actually "
+            "used (e.g. the Wikipedia article the search matched)."
+        ),
+    )
+    summary: str | None = Field(
+        None,
+        description=(
+            "The resolved reference text used to ground the model. Always set "
+            "on a response. If supplied on a request it is reused verbatim and "
+            "no lookup runs — this is the field to store and correct for stable "
+            "re-tagging."
+        ),
+    )
+    source: str | None = Field(
+        None,
+        description=(
+            "Provenance of the resolved summary: 'provided-summary', "
+            "'provided-text', 'provided-link', 'wikipedia', or 'none'. Set on "
+            "responses so a bad auto-match is diagnosable."
+        ),
+    )
+
+
 class TaggingRequest(BaseModel):
     """Request to generate free-form tags for a media item.
 
@@ -70,6 +127,13 @@ class TaggingRequest(BaseModel):
         default_factory=list,
         description="Preferred tags to reuse when generating a final tag set",
     )
+    context: MediaContext | None = Field(
+        None,
+        description=(
+            "Optional grounding context to override the Wikipedia auto-search. "
+            "Supply corrected info here to fix bad tagging from a wrong match."
+        ),
+    )
     debug: bool = Field(
         False,
         description="Enable debug logging for outgoing LLM and downstream service calls",
@@ -80,6 +144,14 @@ class TaggingResponse(BaseModel):
     """Free-form tag response."""
 
     tags: list[str]
+    context: MediaContext = Field(
+        default_factory=MediaContext,
+        description=(
+            "The grounding context actually used, echoed back so it can be "
+            "stored and corrected. Reveals which reference (e.g. Wikipedia "
+            "page) drove the tags."
+        ),
+    )
 
 
 class TagSample(BaseModel):
@@ -172,6 +244,13 @@ class CategorizationRequest(BaseModel):
         default_factory=list,
         description="Optional channels to consider for mapping (used for backward compatibility)",
     )
+    context: MediaContext | None = Field(
+        None,
+        description=(
+            "Optional grounding context to override the Wikipedia auto-search. "
+            "Supply corrected info here to fix bad categorization from a wrong match."
+        ),
+    )
     debug: bool = Field(
         False,
         description="Enable debug logging for outgoing LLM and downstream service calls",
@@ -185,6 +264,14 @@ class CategorizationResponse(BaseModel):
     mappings: list[ChannelMapping] = Field(
         default_factory=list,
         description="Optional channel mapping suggestions for compatibility",
+    )
+    context: MediaContext = Field(
+        default_factory=MediaContext,
+        description=(
+            "The grounding context actually used, echoed back so it can be "
+            "stored and corrected. Reveals which reference (e.g. Wikipedia "
+            "page) drove the categorization."
+        ),
     )
 
 

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import logging
+import uuid
 
 from fastapi import APIRouter
-import uuid
 
 from tunabrain.api.models import (
     BumperRequest,
@@ -12,6 +12,18 @@ from tunabrain.api.models import (
     CategorizationResponse,
     ChannelMappingRequest,
     ChannelMappingResponse,
+    EpisodeSpecialFlagRequest,
+    EpisodeSpecialFlagResponse,
+    MonthlyOverridesRequest,
+    MonthlyOverridesResponse,
+    MonthlyStrategyRequest,
+    MonthlyStrategyResponse,
+    QuarterlyGridRepairRequest,
+    QuarterlyGridRepairResponse,
+    QuarterlyGridRequest,
+    QuarterlyGridResponse,
+    QuarterlyStrategyRequest,
+    QuarterlyStrategyResponse,
     ScheduleRequest,
     ScheduleResponse,
     TagAuditRequest,
@@ -20,36 +32,23 @@ from tunabrain.api.models import (
     TaggingResponse,
     TagTriageRequest,
     TagTriageResponse,
-    EpisodeSpecialFlagRequest,
-    EpisodeSpecialFlagResponse,
-    QuarterlyStrategyRequest,
-    QuarterlyStrategyResponse,
-    MonthlyStrategyRequest,
-    MonthlyStrategyResponse,
-    QuarterlyGridRequest,
-    QuarterlyGridResponse,
-    QuarterlyGridRepairRequest,
-    QuarterlyGridRepairResponse,
-    MonthlyOverridesRequest,
-    MonthlyOverridesResponse,
-    ErrorResponse,
 )
 from tunabrain.chains.bumpers import generate_bumpers
 from tunabrain.chains.categorization import categorize_media
 from tunabrain.chains.channel_mapping import map_media_to_channels
+from tunabrain.chains.episode_flagging import generate_episode_flags
 from tunabrain.chains.scheduling import build_schedule
 from tunabrain.chains.tag_governance import audit_tags, triage_tags
 from tunabrain.chains.tagging import generate_tags
-from tunabrain.chains.episode_flagging import generate_episode_flags
-from tunabrain.scheduling.quarterly_strategy import generate_quarterly_strategy
+from tunabrain.config import is_debug_enabled
+from tunabrain.scheduling.cost import calculate_cost
+from tunabrain.scheduling.monthly_overrides import propose_monthly_overrides
 from tunabrain.scheduling.monthly_strategy import generate_monthly_strategy_agent_loop
 from tunabrain.scheduling.quarterly_grid import (
     propose_quarterly_grid,
     repair_quarterly_grid,
 )
-from tunabrain.scheduling.monthly_overrides import propose_monthly_overrides
-from tunabrain.scheduling.cost import calculate_cost
-from tunabrain.config import is_debug_enabled
+from tunabrain.scheduling.quarterly_strategy import generate_quarterly_strategy
 from tunabrain.version import get_git_info
 
 router = APIRouter()
@@ -79,13 +78,14 @@ async def tag_media(request: TaggingRequest) -> TaggingResponse:
     vocabulary scheduling attributes.
     """
     logger.info("Processing tagging request for title='%s'", request.media.title)
-    tags = await generate_tags(
+    tags, context = await generate_tags(
         request.media,
         request.existing_tags,
         debug=is_debug_enabled(request.debug),
+        context=request.context,
     )
     logger.info("Generated %s tags for title='%s'", len(tags), request.media.title)
-    return TaggingResponse(tags=tags)
+    return TaggingResponse(tags=tags, context=context)
 
 
 # DEPRECATED: Hardcoded channel mapping. Channels are a dimension now.
@@ -119,11 +119,13 @@ async def categorize(request: CategorizationRequest) -> CategorizationResponse:
         categories=request.categories,
         channels=request.channels,
         debug=is_debug_enabled(request.debug),
+        context=request.context,
     )
     logger.info("Categorization complete with %s dimensions", len(categorization.dimensions))
     return CategorizationResponse(
         dimensions=categorization.dimensions,
         mappings=categorization.channel_mappings,
+        context=categorization.context,
     )
 
 
@@ -288,15 +290,15 @@ async def get_quarterly_strategy(request: QuarterlyStrategyRequest) -> Quarterly
             cost_estimate={
                 "estimated_cost_usd": cost_usd,
                 "llm_calls_used": 1,
-                "estimated_tokens": f"~3,500",
+                "estimated_tokens": "~3,500",
                 "provider": "openrouter",
                 "model": "gpt-4o-mini"
             },
             suggested_next_steps=[
-                f"Review strategy with content team",
+                "Review strategy with content team",
                 f"Generate monthly strategies for each month in Q{request.quarter[1]}",
-                f"Communicate themes to marketing and production",
-                f"Finalize special events calendar"
+                "Communicate themes to marketing and production",
+                "Finalize special events calendar"
             ]
         )
     
@@ -371,9 +373,9 @@ async def get_monthly_strategy(request: MonthlyStrategyRequest) -> MonthlyStrate
                 "model": "gpt-4o-mini"
             },
             suggested_next_steps=[
-                f"Review monthly strategy with content team",
+                "Review monthly strategy with content team",
                 f"Generate weekly schedules for {request.month}",
-                f"Allocate media to time blocks per recommendations",
+                "Allocate media to time blocks per recommendations",
                 f"Coordinate with marketing on opening tagline: '{final_strategy.opening_tagline}'"
             ]
         )
