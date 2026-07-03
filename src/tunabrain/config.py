@@ -30,6 +30,7 @@ class Settings:
     show_llm_model: str | None = None        # Full tagging for shows
     episode_llm_model: str | None = None     # Lightweight episode special flags
     schedule_llm_model: str | None = None    # Schedule building
+    bumpers_llm_model: str | None = None     # Bumper prompt generation
 
     # Max number of (schedulable) shows to enumerate in scheduling prompts. The
     # catalog shape is always summarized; this caps the per-show detail list so a
@@ -61,15 +62,17 @@ def get_settings() -> Settings:
         show_llm_model=os.getenv("TUNABRAIN_SHOW_LLM_MODEL"),
         episode_llm_model=os.getenv("TUNABRAIN_EPISODE_LLM_MODEL"),
         schedule_llm_model=os.getenv("TUNABRAIN_SCHEDULE_LLM_MODEL"),
+        bumpers_llm_model=os.getenv("TUNABRAIN_BUMPERS_LLM_MODEL"),
         schedule_max_shows=int(os.getenv("TUNABRAIN_SCHEDULE_MAX_SHOWS", "300")),
     )
     logger.info(
-        "Loaded settings: provider=%s model=%s (shows=%s episodes=%s schedule=%s) debug=%s", 
+        "Loaded settings: provider=%s model=%s (shows=%s episodes=%s schedule=%s bumpers=%s) debug=%s", 
         settings.llm_provider,
         settings.llm_model,
         settings.show_llm_model or "default",
         settings.episode_llm_model or "default",
         settings.schedule_llm_model or "default",
+        settings.bumpers_llm_model or "default",
         settings.debug_enabled,
     )
     return settings

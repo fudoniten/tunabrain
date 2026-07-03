@@ -312,6 +312,9 @@ class BumperRequest(BaseModel):
     focus_window: str | None = Field(
         None, description="Temporal focus for the bumper, e.g. 'coming up this week'"
     )
+    theme: str | None = Field(
+        None, description="Optional creative theme override"
+    )
     debug: bool = Field(
         False,
         description="Enable debug logging for outgoing LLM and downstream service calls",
@@ -322,6 +325,9 @@ class Bumper(BaseModel):
     title: str
     script: str
     duration_seconds: int
+    image_base64: str | None = Field(
+        None, description="Base64-encoded PNG image for the bumper visual"
+    )
 
 
 class BumperResponse(BaseModel):

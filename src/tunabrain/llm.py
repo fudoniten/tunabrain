@@ -49,6 +49,8 @@ def get_chat_model(task: LLMTask = LLMTask.DEFAULT):
         model_to_use = settings.episode_llm_model
     elif task == LLMTask.SCHEDULING and settings.schedule_llm_model:
         model_to_use = settings.schedule_llm_model
+    elif task == LLMTask.BUMPERS and settings.bumpers_llm_model:
+        model_to_use = settings.bumpers_llm_model
 
     # Explicitly pass the API key when available so deployments can rely on the
     # OpenAI environment variable or overrides without extra wiring.

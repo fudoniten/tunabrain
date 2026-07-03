@@ -168,6 +168,7 @@ async def bumpers(request: BumperRequest) -> BumperResponse:
         schedule_overview=request.schedule_overview,
         duration_seconds=request.duration_seconds,
         focus_window=request.focus_window,
+        theme=request.theme,
         debug=is_debug_enabled(request.debug),
     )
     logger.info("Generated %s bumpers for channel='%s'", len(bumpers), request.channel.name)

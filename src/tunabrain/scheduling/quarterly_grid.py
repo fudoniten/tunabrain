@@ -201,7 +201,7 @@ Respond in valid JSON ONLY:
       "days": "daily" | "weekdays" | "weekends" | ["mon","wed","fri", ...],
       "start": "HH:MM",
       "end": "HH:MM (end <= start wraps past midnight)",
-      "media_id": "series:<id> | movie:<id> | random:<category> (use ids from the catalog)",
+      "media_id": "series:<id> | movie:<id> | random:<genre> (genre MUST be one of the genres listed in the catalog profile above; never 'series', 'movie', 'show', or 'episode')",
       "strategy": "sequential | random | specific",
       "category_filters": ["string", ...],
       "label": "string (short, for the GUI)"
