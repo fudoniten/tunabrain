@@ -15,7 +15,10 @@ import pytest
 
 from tunabrain.api.models import (
     CategoryDefinition,
+    CostEstimate,
+    DescribeMedia,
     DimensionSelection,
+    EnrichDescribeResponse,
     EnrichLongFormOptions,
     EnrichLongFormRequest,
     MediaContext,
@@ -63,8 +66,20 @@ def stub_llm_stages(monkeypatch):
         seen["tags_context"] = context
         return ["documentary", "long-form"], context or MediaContext(source="none")
 
+    async def fake_describe(media, context=None, *, debug=False, llm=None):
+        seen["describe_context"] = context
+        return EnrichDescribeResponse(
+            media=DescribeMedia(id=media.id, title="A Video Essay", description="An essay."),
+            context=context or MediaContext(source="none"),
+            cost_estimate=CostEstimate(
+                estimated_cost_usd=0.0, llm_calls_used=1, estimated_tokens="~1"
+            ),
+            warnings=[],
+        )
+
     monkeypatch.setattr(enrich_long, "categorize_media", fake_categorize)
     monkeypatch.setattr(enrich_long, "generate_tags", fake_generate_tags)
+    monkeypatch.setattr(enrich_long, "describe_media", fake_describe)
     return seen
 
 
@@ -480,7 +495,12 @@ async def test_enrich_long_form_returns_pipeline_stages(monkeypatch, tmp_path, s
     resp = await enrich_long.run_enrich_long_form(req, stt_client=stub, hard_cap_seconds=10)
 
     reported = {s.stage for s in resp.pipeline_stages}
-    assert reported == {"fetch", "extract_audio", "stt", "keyframes", "categorize", "tags"}
+    assert reported == {
+        "fetch", "extract_audio", "stt", "keyframes", "categorize", "tags", "describe"
+    }
+    # Describe produced a display title + description on the response.
+    assert resp.describe is not None
+    assert resp.describe.title == "A Video Essay"
     for stage in resp.pipeline_stages:
         assert stage.status in {"success", "skipped", "warning", "failed"}
         assert stage.duration_seconds >= 0

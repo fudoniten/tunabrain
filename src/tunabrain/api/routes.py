@@ -12,6 +12,8 @@ from tunabrain.api.models import (
     CategorizationResponse,
     ChannelMappingRequest,
     ChannelMappingResponse,
+    EnrichDescribeRequest,
+    EnrichDescribeResponse,
     EnrichLongFormRequest,
     EnrichLongFormResponse,
     EnrichShortFormRequest,
@@ -40,6 +42,7 @@ from tunabrain.api.models import (
 from tunabrain.chains.bumpers import generate_bumpers
 from tunabrain.chains.categorization import categorize_media
 from tunabrain.chains.channel_mapping import map_media_to_channels
+from tunabrain.chains.describe import describe_media
 from tunabrain.chains.enrich_long import run_enrich_long_form
 from tunabrain.chains.enrich_short import run_enrich_short_form
 from tunabrain.chains.episode_flagging import generate_episode_flags
@@ -176,6 +179,29 @@ async def enrich_long_form(request: EnrichLongFormRequest) -> EnrichLongFormResp
         len(response.dimensions),
         len(response.tags),
         len(response.transcript),
+    )
+    return response
+
+
+@router.post("/enrich/describe", response_model=EnrichDescribeResponse)
+async def enrich_describe(request: EnrichDescribeRequest) -> EnrichDescribeResponse:
+    """Derive a display-ready title and short description for a media item.
+
+    Takes a media item that already has a rough working ``title`` (a filename,
+    an on-disk path, or the literal 'Unknown') and returns a refined title plus
+    a one-sentence description synthesised from the resolved grounding context.
+    This is the describe-only building block that /enrich/short-form and
+    /enrich/long-form will call internally. The endpoint never invents a title
+    from nothing (an empty title is rejected with 422) and always returns a
+    non-empty title, degrading to the working title with a warning rather than
+    failing.
+    """
+    logger.info("Processing describe enrichment for title='%s'", request.media.title)
+    response = await describe_media(request.media, request.context, debug=request.debug)
+    logger.info(
+        "Describe enrichment complete for '%s' -> title='%s'",
+        request.media.title,
+        response.media.title,
     )
     return response
 
