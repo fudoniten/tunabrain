@@ -81,13 +81,43 @@ python -m tunabrain
 
 Every chain that invokes an LLM will pick up these settings automatically.
 
+### Grout enrichment (STT + keyframes)
+
+The `/enrich/long-form` endpoint transcribes media before categorizing it, using
+one of the cluster's speech-to-text services. These are pluggable; a default is
+chosen here and can be overridden per request via `options.stt_backend`:
+
+- `TUNABRAIN_STT_WHISPER_URL`: whisper-http (OpenAI-compatible) base URL
+  (default: `http://whisper-http.wyoming.svc.cluster.local:10301`).
+- `TUNABRAIN_STT_SUBGEN_URL`: subgen base URL
+  (default: `http://subgen.arr.svc.cluster.local:9000`).
+- `TUNABRAIN_STT_DEFAULT_BACKEND`: `whisper-http`, `subgen`, or `auto`
+  (default: `auto` — probes both and uses whichever health endpoint responds
+  first, falling back to the other if the winner's transcription fails).
+- `TUNABRAIN_STT_WHISPER_MODEL`: model name requested from whisper-http
+  (default: `turbo` — the only model registered in the current deployment; do
+  **not** set this to `large-v3`, the server will reject it).
+- `TUNABRAIN_SCRATCH_DIR`: shared scratch space for fetched media and extracted
+  audio/keyframes (default: `/tmp/tunabrain-scratch`). `file_id` sources are
+  resolved relative to this directory.
+- `TUNABRAIN_ENRICH_LONG_TIMEOUT`: hard cap in seconds for the whole long-form
+  pipeline (default: `900`). On timeout the request returns a degraded response
+  with a warning rather than hanging.
+
+`/enrich/long-form` shells out to `ffmpeg` (already a Nix shell dependency) to
+extract audio and keyframes.
+
 ### Endpoints
 
 - `POST /tags`: Generate scheduling-oriented tags for a media item.
-- `POST /channel-mapping`: Associate a media item with matching channels.
+- `POST /categorize`: Categorize a media item across caller-supplied dimensions.
+- `POST /channel-mapping`: Associate a media item with matching channels (deprecated; use the `channel` dimension in `/categorize`).
 - `POST /schedule`: Build a schedule for a channel using provided media and instructions.
 - `POST /bumpers`: Produce bumpers tailored to a schedule.
-
-Each endpoint currently delegates to LangChain workflow stubs that raise
-`NotImplementedError`, ready for future implementation.
+- `POST /enrich/short-form`: One-call enrichment for short-form media (bumpers,
+  fillers, ads, music videos). Orchestrates `/categorize` + `/tags`; no STT.
+- `POST /enrich/long-form`: One-call enrichment for long-form media
+  (documentaries, video essays, interviews). Fetches the media, extracts audio,
+  transcribes it (STT), optionally captions keyframes, then runs
+  `/categorize` + `/tags` grounded on the transcript.
 

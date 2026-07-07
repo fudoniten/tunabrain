@@ -12,7 +12,6 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -37,6 +36,19 @@ class Settings:
     # large library stays within a sensible prompt size. Long-context models
     # (e.g. Claude Opus) can afford a high value.
     schedule_max_shows: int = 300
+
+    # --- Grout long-form enrichment (STT + keyframes) ---
+    # Both STT backends exist in the cluster with different performance profiles
+    # (see the enrich spec §4). The orchestrator is pluggable: pick a default
+    # here, override per-request via EnrichLongFormOptions.stt_backend.
+    stt_whisper_url: str = "http://whisper-http.wyoming.svc.cluster.local:10301"
+    stt_subgen_url: str = "http://subgen.arr.svc.cluster.local:9000"
+    stt_default_backend: str = "auto"
+    # whisper-http only has "turbo" registered in the current deployment; do NOT
+    # default to large-v3 (the server rejects it). Overridable for other deploys.
+    stt_whisper_model: str = "turbo"
+    scratch_dir: str = "/tmp/tunabrain-scratch"
+    enrich_long_timeout: int = 900
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -64,6 +76,17 @@ def get_settings() -> Settings:
         schedule_llm_model=os.getenv("TUNABRAIN_SCHEDULE_LLM_MODEL"),
         bumpers_llm_model=os.getenv("TUNABRAIN_BUMPERS_LLM_MODEL"),
         schedule_max_shows=int(os.getenv("TUNABRAIN_SCHEDULE_MAX_SHOWS", "300")),
+        stt_whisper_url=os.getenv(
+            "TUNABRAIN_STT_WHISPER_URL",
+            "http://whisper-http.wyoming.svc.cluster.local:10301",
+        ),
+        stt_subgen_url=os.getenv(
+            "TUNABRAIN_STT_SUBGEN_URL", "http://subgen.arr.svc.cluster.local:9000"
+        ),
+        stt_default_backend=os.getenv("TUNABRAIN_STT_DEFAULT_BACKEND", "auto"),
+        stt_whisper_model=os.getenv("TUNABRAIN_STT_WHISPER_MODEL", "turbo"),
+        scratch_dir=os.getenv("TUNABRAIN_SCRATCH_DIR", "/tmp/tunabrain-scratch"),
+        enrich_long_timeout=int(os.getenv("TUNABRAIN_ENRICH_LONG_TIMEOUT", "900")),
     )
     logger.info(
         "Loaded settings: provider=%s model=%s (shows=%s episodes=%s schedule=%s bumpers=%s) debug=%s", 

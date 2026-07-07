@@ -12,6 +12,10 @@ from tunabrain.api.models import (
     CategorizationResponse,
     ChannelMappingRequest,
     ChannelMappingResponse,
+    EnrichLongFormRequest,
+    EnrichLongFormResponse,
+    EnrichShortFormRequest,
+    EnrichShortFormResponse,
     EpisodeSpecialFlagRequest,
     EpisodeSpecialFlagResponse,
     MonthlyOverridesRequest,
@@ -36,6 +40,8 @@ from tunabrain.api.models import (
 from tunabrain.chains.bumpers import generate_bumpers
 from tunabrain.chains.categorization import categorize_media
 from tunabrain.chains.channel_mapping import map_media_to_channels
+from tunabrain.chains.enrich_long import run_enrich_long_form
+from tunabrain.chains.enrich_short import run_enrich_short_form
 from tunabrain.chains.episode_flagging import generate_episode_flags
 from tunabrain.chains.scheduling import build_schedule
 from tunabrain.chains.tag_governance import audit_tags, triage_tags
@@ -127,6 +133,51 @@ async def categorize(request: CategorizationRequest) -> CategorizationResponse:
         mappings=categorization.channel_mappings,
         context=categorization.context,
     )
+
+
+@router.post("/enrich/short-form", response_model=EnrichShortFormResponse)
+async def enrich_short_form(request: EnrichShortFormRequest) -> EnrichShortFormResponse:
+    """Enrich short-form media (bumpers, fillers, ads, music videos) in one call.
+
+    Orchestrates the existing /categorize + /tags building blocks: the categories
+    catalog is forwarded verbatim, and the grounding context resolved by
+    categorize is propagated into tags. No STT — short-form media has no audio
+    worth transcribing; filename, duration, and any operator context are enough.
+    """
+    logger.info("Processing short-form enrichment for title='%s'", request.media.title)
+    response = await run_enrich_short_form(request)
+    logger.info(
+        "Short-form enrichment complete for '%s': %s dimensions, %s tags",
+        request.media.title,
+        len(response.dimensions),
+        len(response.tags),
+    )
+    return response
+
+
+@router.post("/enrich/long-form", response_model=EnrichLongFormResponse)
+async def enrich_long_form(request: EnrichLongFormRequest) -> EnrichLongFormResponse:
+    """Enrich long-form media (documentaries, video essays, interviews) in one call.
+
+    Runs the full pipeline: fetch the media, extract audio, transcribe via the
+    cluster's STT service (pluggable; defaults to auto), optionally caption a few
+    keyframes, then categorize + tags grounded on the assembled transcript. Every
+    stage degrades gracefully and the whole pipeline is bounded by a hard timeout.
+    """
+    logger.info(
+        "Processing long-form enrichment for title='%s' (stt=%s)",
+        request.media.title,
+        request.options.stt_backend,
+    )
+    response = await run_enrich_long_form(request)
+    logger.info(
+        "Long-form enrichment complete for '%s': %s dimensions, %s tags, transcript=%s chars",
+        request.media.title,
+        len(response.dimensions),
+        len(response.tags),
+        len(response.transcript),
+    )
+    return response
 
 
 @router.post("/schedule", response_model=ScheduleResponse)
