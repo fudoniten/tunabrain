@@ -81,7 +81,7 @@ def test_empty_title_is_rejected():
 
 @pytest.mark.anyio
 async def test_describe_returns_refined_title_and_description(stub_describe):
-    resp = await describe_media(EnrichDescribeRequest(media=_media()))
+    resp = await describe_media(_media())
 
     assert resp.media.id == "grout-1"
     assert resp.media.title == "Animation School: Keeping Motivated"
@@ -96,7 +96,7 @@ async def test_describe_returns_refined_title_and_description(stub_describe):
 @pytest.mark.anyio
 async def test_describe_forwards_context_override(stub_describe):
     override = MediaContext(text="operator note about the video")
-    await describe_media(EnrichDescribeRequest(media=_media(), context=override))
+    await describe_media(_media(), override)
 
     # The caller's context is handed to resolution to skip the auto-search.
     assert stub_describe["resolve_context"] is override
@@ -105,9 +105,7 @@ async def test_describe_forwards_context_override(stub_describe):
 @pytest.mark.anyio
 async def test_describe_allows_null_description(stub_describe):
     stub_describe["result"] = DescribeResult(title="Channel Ident", description=None)
-    resp = await describe_media(
-        EnrichDescribeRequest(media=_media(title="ident-5s.mp4", duration_minutes=None))
-    )
+    resp = await describe_media(_media(title="ident-5s.mp4", duration_minutes=None))
 
     assert resp.media.title == "Channel Ident"
     assert resp.media.description is None
@@ -117,7 +115,7 @@ async def test_describe_allows_null_description(stub_describe):
 @pytest.mark.anyio
 async def test_describe_keeps_working_title_when_model_returns_empty(stub_describe):
     stub_describe["result"] = DescribeResult(title="   ", description=None)
-    resp = await describe_media(EnrichDescribeRequest(media=_media()))
+    resp = await describe_media(_media())
 
     # Never returns an empty title: falls back to the working title with a warning.
     assert resp.media.title == _media().title
@@ -137,7 +135,7 @@ async def test_describe_degrades_to_working_title_on_llm_failure(monkeypatch):
     monkeypatch.setattr(describe_mod, "get_chat_model", lambda *a, **k: BoomLLM())
 
     media = _media()
-    resp = await describe_media(EnrichDescribeRequest(media=media))
+    resp = await describe_media(media)
 
     # A failed LLM call is a warning, not a 500: the working title is returned.
     assert resp.media.title == media.title

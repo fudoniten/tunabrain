@@ -13,7 +13,10 @@ import pytest
 from tunabrain.api.models import (
     CategoryDefinition,
     Channel,
+    CostEstimate,
+    DescribeMedia,
     DimensionSelection,
+    EnrichDescribeResponse,
     EnrichShortFormRequest,
     MediaContext,
     MediaItem,
@@ -25,6 +28,18 @@ from tunabrain.chains.enrich_short import run_enrich_short_form
 
 def _media() -> MediaItem:
     return MediaItem(id="grout-1", title="mystery-bumper-5e0ff26a", duration_minutes=1)
+
+
+def _describe_response(media, context=None, *, title="Refined Title", description="A short clip."):
+    """Build a stub EnrichDescribeResponse echoing the given context."""
+    return EnrichDescribeResponse(
+        media=DescribeMedia(id=media.id, title=title, description=description),
+        context=context or MediaContext(),
+        cost_estimate=CostEstimate(
+            estimated_cost_usd=0.0, llm_calls_used=1, estimated_tokens="~1"
+        ),
+        warnings=[],
+    )
 
 
 def _categories() -> dict[str, CategoryDefinition]:
@@ -57,8 +72,13 @@ def stub_chain(monkeypatch):
             summary="resolved by tags", source="provided-summary"
         )
 
+    async def fake_describe(media, context=None, *, debug=False, llm=None):
+        calls["describe"] = {"context": context}
+        return _describe_response(media, context)
+
     monkeypatch.setattr(enrich_short, "categorize_media", fake_categorize)
     monkeypatch.setattr(enrich_short, "generate_tags", fake_generate_tags)
+    monkeypatch.setattr(enrich_short, "describe_media", fake_describe)
     return calls
 
 
@@ -93,7 +113,13 @@ async def test_enrich_short_form_returns_combined_response(stub_chain):
 
     assert [d.dimension for d in resp.dimensions] == ["audience"]
     assert resp.tags == ["filler", "short"]
-    # The last context echoed (tags ran second) is what's returned for storage.
+    # Describe ran and produced a display title + description.
+    assert resp.describe is not None
+    assert resp.describe.title == "Refined Title"
+    assert resp.describe.description == "A short clip."
+    # Describe grounds on the context resolved by categorize/tags.
+    assert stub_chain["describe"]["context"].summary == "resolved by tags"
+    # Upstream provenance is preserved (not flattened by describe's echo).
     assert resp.context.summary == "resolved by tags"
     assert resp.warnings == []
     assert resp.cost_estimate.llm_calls_used >= 1
@@ -110,8 +136,12 @@ async def test_enrich_short_form_handles_categorize_failure(monkeypatch):
         captured["context"] = context
         return ["still-tagged"], MediaContext(summary="tags ran", source="none")
 
+    async def fake_describe(media, context=None, *, debug=False, llm=None):
+        return _describe_response(media, context)
+
     monkeypatch.setattr(enrich_short, "categorize_media", boom_categorize)
     monkeypatch.setattr(enrich_short, "generate_tags", fake_generate_tags)
+    monkeypatch.setattr(enrich_short, "describe_media", fake_describe)
 
     req = EnrichShortFormRequest(media=_media(), categories=_categories())
     resp = await run_enrich_short_form(req)
@@ -120,6 +150,8 @@ async def test_enrich_short_form_handles_categorize_failure(monkeypatch):
     assert any("categorize failed" in w for w in resp.warnings)
     assert resp.dimensions == []
     assert resp.tags == ["still-tagged"]
+    # Describe still runs and produces a title even when categorize failed.
+    assert resp.describe is not None
     # With no categorize context, the request's context (None here) is propagated.
     assert captured["context"] is None
 
@@ -136,8 +168,12 @@ async def test_enrich_short_form_handles_tags_failure(monkeypatch):
     async def boom_tags(*args, **kwargs):
         raise RuntimeError("tags exploded")
 
+    async def fake_describe(media, context=None, *, debug=False, llm=None):
+        return _describe_response(media, context)
+
     monkeypatch.setattr(enrich_short, "categorize_media", fake_categorize)
     monkeypatch.setattr(enrich_short, "generate_tags", boom_tags)
+    monkeypatch.setattr(enrich_short, "describe_media", fake_describe)
 
     req = EnrichShortFormRequest(media=_media(), categories=_categories())
     resp = await run_enrich_short_form(req)

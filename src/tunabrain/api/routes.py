@@ -197,7 +197,7 @@ async def enrich_describe(request: EnrichDescribeRequest) -> EnrichDescribeRespo
     failing.
     """
     logger.info("Processing describe enrichment for title='%s'", request.media.title)
-    response = await describe_media(request)
+    response = await describe_media(request.media, request.context, debug=request.debug)
     logger.info(
         "Describe enrichment complete for '%s' -> title='%s'",
         request.media.title,

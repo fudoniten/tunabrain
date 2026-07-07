@@ -975,6 +975,13 @@ class EnrichShortFormResponse(BaseModel):
     """Combined enrichment result for short-form media."""
 
     media: MediaItem = Field(..., description="The media item that was enriched (echoed back)")
+    describe: DescribeMedia | None = Field(
+        None,
+        description=(
+            "Refined display title and short description from the /enrich/describe "
+            "step. Null only if that step failed (see warnings)."
+        ),
+    )
     dimensions: list[DimensionSelection] = Field(
         default_factory=list, description="Structured dimension selections from /categorize"
     )
@@ -1077,9 +1084,9 @@ class EnrichLongFormRequest(BaseModel):
 class PipelineStageResult(BaseModel):
     """Per-stage status for the long-form pipeline, with timing and diagnostics."""
 
-    stage: Literal["fetch", "extract_audio", "stt", "keyframes", "categorize", "tags"] = Field(
-        ..., description="Which pipeline stage this result describes"
-    )
+    stage: Literal[
+        "fetch", "extract_audio", "stt", "keyframes", "categorize", "tags", "describe"
+    ] = Field(..., description="Which pipeline stage this result describes")
     status: Literal["success", "skipped", "warning", "failed"] = Field(
         ..., description="Outcome of the stage"
     )
@@ -1094,6 +1101,13 @@ class EnrichLongFormResponse(BaseModel):
     """Combined enrichment result for long-form media."""
 
     media: MediaItem = Field(..., description="The media item that was enriched (echoed back)")
+    describe: DescribeMedia | None = Field(
+        None,
+        description=(
+            "Refined display title and short description from the /enrich/describe "
+            "step. Null only if that step failed (see warnings)."
+        ),
+    )
     dimensions: list[DimensionSelection] = Field(
         default_factory=list, description="Structured dimension selections from /categorize"
     )

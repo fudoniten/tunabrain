@@ -31,9 +31,9 @@ from pydantic import BaseModel, Field
 from tunabrain.api.models import (
     CostEstimate,
     DescribeMedia,
-    EnrichDescribeRequest,
     EnrichDescribeResponse,
     MediaContext,
+    MediaItem,
 )
 from tunabrain.chains.context import resolve_media_context
 from tunabrain.config import get_settings, is_debug_enabled
@@ -100,8 +100,10 @@ _SYSTEM_PROMPT = (
 
 
 async def describe_media(
-    request: EnrichDescribeRequest,
+    media: MediaItem,
+    context: MediaContext | None = None,
     *,
+    debug: bool = False,
     llm: RunnableSerializable | None = None,
 ) -> EnrichDescribeResponse:
     """Derive a display title and short description for a media item.
@@ -114,16 +116,20 @@ async def describe_media(
     The endpoint always returns a non-empty title: if the LLM call fails or
     returns unusable output, the working title is returned unchanged and the
     problem is surfaced in ``warnings`` rather than raised.
+
+    ``media``/``context`` are taken directly (rather than the request object) so
+    the composite ``/enrich/short-form`` and ``/enrich/long-form`` chains can
+    call this with the context they have already resolved — passing that summary
+    back in reuses it verbatim and avoids a second Wikipedia lookup.
     """
-    debug = is_debug_enabled(request.debug)
-    media = request.media
+    debug = is_debug_enabled(debug)
     logger.info("Describe for title='%s' (id=%s)", media.title, media.id)
 
     warnings: list[str] = []
     llm_instance = llm or get_chat_model()
 
     resolved = await resolve_media_context(
-        media, request.context, llm=llm_instance, debug=debug
+        media, context, llm=llm_instance, debug=debug
     )
 
     parser = PydanticOutputParser(pydantic_object=DescribeResult)

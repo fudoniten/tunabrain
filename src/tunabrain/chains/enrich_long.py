@@ -29,6 +29,7 @@ import httpx
 
 from tunabrain.api.models import (
     CostEstimate,
+    DescribeMedia,
     EnrichLongFormRequest,
     EnrichLongFormResponse,
     MediaContext,
@@ -36,6 +37,7 @@ from tunabrain.api.models import (
     PipelineStageResult,
 )
 from tunabrain.chains.categorization import categorize_media
+from tunabrain.chains.describe import describe_media
 from tunabrain.chains.tagging import generate_tags
 from tunabrain.config import get_settings, is_debug_enabled
 from tunabrain.keyframes.caption import caption_keyframes
@@ -269,9 +271,32 @@ async def _run_pipeline(request: EnrichLongFormRequest, stt_client) -> EnrichLon
         warnings.append(f"tags failed: {exc}")
         stages.append(_stage("tags", "failed", started, detail=str(exc)))
 
-    llm_calls = max(1, categorize_calls + tags_calls + len(keyframe_captions))
+    # --- describe ---
+    # Derive a display title + short description, grounded on the context
+    # already resolved above so the assembled transcript/keyframe summary is
+    # reused verbatim (no second Wikipedia lookup).
+    started = perf_counter()
+    describe: DescribeMedia | None = None
+    describe_calls = 0
+    try:
+        describe_result = await describe_media(request.media, resolved_context, debug=debug)
+        describe = describe_result.media
+        describe_calls = describe_result.cost_estimate.llm_calls_used
+        warnings.extend(describe_result.warnings)
+        # Preserve upstream provenance; only adopt describe's context if nothing
+        # was resolved earlier (see the short-form chain for the rationale).
+        if not (resolved_context and resolved_context.summary):
+            resolved_context = describe_result.context
+        stages.append(_stage("describe", "success", started))
+    except Exception as exc:  # pragma: no cover - describe is robust internally
+        logger.warning("Enrich long-form describe failed: %s", exc)
+        warnings.append(f"describe failed: {exc}")
+        stages.append(_stage("describe", "failed", started, detail=str(exc)))
+
+    llm_calls = max(1, categorize_calls + tags_calls + describe_calls + len(keyframe_captions))
     return EnrichLongFormResponse(
         media=request.media,
+        describe=describe,
         dimensions=dimensions,
         tags=tags,
         transcript=transcript,

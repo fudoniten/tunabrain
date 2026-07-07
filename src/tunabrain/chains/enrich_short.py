@@ -18,11 +18,13 @@ import logging
 
 from tunabrain.api.models import (
     CostEstimate,
+    DescribeMedia,
     EnrichShortFormRequest,
     EnrichShortFormResponse,
     MediaContext,
 )
 from tunabrain.chains.categorization import categorize_media
+from tunabrain.chains.describe import describe_media
 from tunabrain.chains.tagging import generate_tags
 from tunabrain.config import get_settings, is_debug_enabled
 from tunabrain.scheduling.cost import calculate_cost
@@ -106,9 +108,31 @@ async def run_enrich_short_form(request: EnrichShortFormRequest) -> EnrichShortF
         logger.warning("Enrich short-form: tags failed for '%s': %s", request.media.title, exc)
         warnings.append(f"tags failed: {exc}")
 
-    llm_calls = max(1, categorize_calls + tags_calls)
+    # Derive a display title + short description. Reuse the context resolved by
+    # categorize/tags so describe grounds on the same reference (and the
+    # Wikipedia auto-search never runs a second time).
+    describe: DescribeMedia | None = None
+    describe_calls = 0
+    try:
+        describe_result = await describe_media(
+            request.media, resolved_context, debug=debug
+        )
+        describe = describe_result.media
+        describe_calls = describe_result.cost_estimate.llm_calls_used
+        warnings.extend(describe_result.warnings)
+        # Only adopt describe's echoed context when categorize/tags resolved
+        # nothing; otherwise keep the upstream context so its provenance (e.g.
+        # source='wikipedia') isn't flattened to 'provided-summary'.
+        if not (resolved_context and resolved_context.summary):
+            resolved_context = describe_result.context
+    except Exception as exc:  # pragma: no cover - defensive; describe is robust internally
+        logger.warning("Enrich short-form: describe failed for '%s': %s", request.media.title, exc)
+        warnings.append(f"describe failed: {exc}")
+
+    llm_calls = max(1, categorize_calls + tags_calls + describe_calls)
     response = EnrichShortFormResponse(
         media=request.media,
+        describe=describe,
         dimensions=dimensions,
         tags=tags,
         context=resolved_context,
