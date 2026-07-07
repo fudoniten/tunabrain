@@ -130,7 +130,7 @@ tests/                     ; pytest suites (incl. golden conformance for the exp
 
 ## Public API surface
 
-The 15 endpoints in current spec (verify live with
+The 17 endpoints in current spec (verify live with
 `curl https://tunabrain.kube.sea.fudo.link/openapi.json | jq '.paths | keys'`):
 
 **Tagging & classification (8):**
@@ -142,6 +142,15 @@ The 15 endpoints in current spec (verify live with
 - `POST /tag-governance/triage` — merge / consolidate
 - `POST /bumpers` — promo text generation
 - `POST /schedule` — legacy "schedule for N days" (predates `/api/scheduling/*`)
+
+**Grout enrichment (2):**
+- `POST /enrich/short-form` — one-call categorize + tags for short-form filler
+  (bumpers, ads, music videos); no STT
+- `POST /enrich/long-form` — fetch → STT (+ optional keyframe captions) →
+  categorize + tags for long-form media. STT backend is pluggable
+  (`whisper-http` / `subgen` / `auto`); shells out to `ffmpeg`. See `README.md`
+  for the `TUNABRAIN_STT_*` / `TUNABRAIN_SCRATCH_DIR` / `TUNABRAIN_ENRICH_LONG_TIMEOUT`
+  env vars.
 
 **Scheduling (5) — the new control plane:**
 - `POST /api/scheduling/propose-quarterly-grid` — Phase 2: LLM authors a

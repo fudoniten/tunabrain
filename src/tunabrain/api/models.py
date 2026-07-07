@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from tunabrain.scheduling.grid import (
     CatalogProfile,
@@ -924,3 +924,193 @@ class MonthlyOverridesResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     cost_estimate: CostEstimate = Field(...)
     suggested_next_steps: list[str] = Field(default_factory=list)
+
+
+# ============================================================================
+# Grout enrichment: /enrich/short-form and /enrich/long-form
+# ============================================================================
+#
+# Two orchestrated endpoints layered on top of the existing /categorize + /tags
+# building blocks. They exist so Grout (bulk, uncategorized media that doesn't
+# fit Jellyfin's film/show paradigm) can get the same scheduling metadata in a
+# single round trip. Short-form wraps categorize+tags directly; long-form first
+# runs STT (and optional keyframe captioning) to synthesise grounding context
+# for media that carries no reliable external metadata.
+#
+# These are additive: they reuse MediaItem, MediaContext, Channel,
+# CategoryDefinition, DimensionSelection, and CostEstimate verbatim and never
+# mutate the existing categorize/tag schemas.
+
+
+class EnrichShortFormRequest(BaseModel):
+    """Request to enrich short-form media (bumpers, fillers, idents, ads, music videos).
+
+    This is an orchestration over the existing /categorize + /tags endpoints.
+    Short-form media has no audio of consequence to transcribe; the only
+    available signals are filename, duration, and (optionally) operator-supplied
+    context. Use this when duration_seconds < 600 and the media has no
+    substantial dialogue track.
+    """
+
+    media: MediaItem = Field(..., description="The media item to enrich")
+    categories: dict[str, CategoryDefinition] = Field(
+        default_factory=dict,
+        description="Operator-supplied dimension catalog, forwarded verbatim to /categorize",
+    )
+    existing_tags: list[str] = Field(
+        default_factory=list, description="Pre-existing free-form tags to reuse when tagging"
+    )
+    context: MediaContext | None = Field(
+        None, description="Optional operator-supplied grounding, propagated to categorize and tags"
+    )
+    channels: list[Channel] = Field(
+        default_factory=list, description="Optional channels passed through to /categorize"
+    )
+    debug: bool = Field(
+        False, description="Enable debug logging for outgoing LLM and downstream service calls"
+    )
+
+
+class EnrichShortFormResponse(BaseModel):
+    """Combined enrichment result for short-form media."""
+
+    media: MediaItem = Field(..., description="The media item that was enriched (echoed back)")
+    dimensions: list[DimensionSelection] = Field(
+        default_factory=list, description="Structured dimension selections from /categorize"
+    )
+    tags: list[str] = Field(default_factory=list, description="Free-form tags from /tags")
+    context: MediaContext | None = Field(
+        None, description="Resolved grounding context actually used, echoed back for storage"
+    )
+    cost_estimate: CostEstimate = Field(..., description="Estimated LLM cost for this enrichment")
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Non-fatal issues (e.g. categorize or tags degraded to a partial result)",
+    )
+
+
+class MediaSource(BaseModel):
+    """How to obtain the media for processing. Exactly one of url/file_id must be set."""
+
+    url: str | None = Field(
+        None, description="HTTP(S) URL to fetch the media from (e.g. YouTube, S3, etc.)"
+    )
+    file_id: str | None = Field(
+        None,
+        description=(
+            "ID of a media file already staged in the cluster's shared scratch space "
+            "(path constructed via the TUNABRAIN_SCRATCH_DIR env var)"
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _exactly_one_source(self) -> MediaSource:
+        if bool(self.url) == bool(self.file_id):
+            raise ValueError("MediaSource requires exactly one of 'url' or 'file_id'")
+        return self
+
+
+class EnrichLongFormOptions(BaseModel):
+    """Per-call knobs for the long-form enrichment pipeline."""
+
+    stt_backend: Literal["whisper-http", "subgen", "auto"] = Field(
+        "auto",
+        description="Which STT service to use. 'auto' probes both and uses the one that responds first.",
+    )
+    enable_keyframe_analysis: bool = Field(
+        True,
+        description="Extract evenly-spaced keyframes and include their captions in the context",
+    )
+    keyframe_count: int = Field(
+        5, ge=1, le=20, description="Number of evenly-spaced keyframes to extract and caption"
+    )
+    max_transcript_chars: int = Field(
+        8000,
+        description=(
+            "Cap the transcript length sent to the LLM (the full transcript is always "
+            "returned in the top-level 'transcript' field regardless of this cap)"
+        ),
+    )
+    stt_timeout_seconds: int = Field(
+        600, ge=10, le=3600, description="Per-request timeout for the STT backend call"
+    )
+    skip_stt_below_seconds: int = Field(
+        30, ge=0, description="Skip STT entirely if the media duration is below this many seconds"
+    )
+
+
+class EnrichLongFormRequest(BaseModel):
+    """Request to enrich long-form media (documentaries, video essays, YouTube series).
+
+    Tunabrain owns the heavy lifting:
+      1. Pull the media from the provided source (URL or pre-staged scratch path)
+      2. Extract the audio track
+      3. Run STT against the cluster's STT service (pluggable; defaults to auto)
+      4. Optionally extract a small set of keyframes and caption them
+      5. Combine transcript + keyframe captions as the grounding context
+      6. Run /categorize + /tags with the resolved context
+
+    Use this when duration_seconds >= 600 OR the media has a substantial dialogue
+    track OR you need grounding from the actual audio/video content.
+    """
+
+    media: MediaItem = Field(..., description="The media item to enrich")
+    source: MediaSource = Field(..., description="Where to obtain the media bytes")
+    categories: dict[str, CategoryDefinition] = Field(
+        default_factory=dict,
+        description="Operator-supplied dimension catalog, forwarded verbatim to /categorize",
+    )
+    existing_tags: list[str] = Field(
+        default_factory=list, description="Pre-existing free-form tags to reuse when tagging"
+    )
+    channels: list[Channel] = Field(
+        default_factory=list, description="Optional channels passed through to /categorize"
+    )
+    options: EnrichLongFormOptions = Field(
+        default_factory=EnrichLongFormOptions, description="Per-call pipeline knobs"
+    )
+    debug: bool = Field(
+        False, description="Enable debug logging for outgoing LLM and downstream service calls"
+    )
+
+
+class PipelineStageResult(BaseModel):
+    """Per-stage status for the long-form pipeline, with timing and diagnostics."""
+
+    stage: Literal["fetch", "extract_audio", "stt", "keyframes", "categorize", "tags"] = Field(
+        ..., description="Which pipeline stage this result describes"
+    )
+    status: Literal["success", "skipped", "warning", "failed"] = Field(
+        ..., description="Outcome of the stage"
+    )
+    duration_seconds: float = Field(..., description="Wall-clock time spent in this stage")
+    backend: str | None = Field(
+        None, description="For the STT stage: the backend actually used ('whisper-http' or 'subgen')"
+    )
+    detail: str | None = Field(None, description="Optional human-readable detail or error message")
+
+
+class EnrichLongFormResponse(BaseModel):
+    """Combined enrichment result for long-form media."""
+
+    media: MediaItem = Field(..., description="The media item that was enriched (echoed back)")
+    dimensions: list[DimensionSelection] = Field(
+        default_factory=list, description="Structured dimension selections from /categorize"
+    )
+    tags: list[str] = Field(default_factory=list, description="Free-form tags from /tags")
+    transcript: str = Field(
+        "", description="Full STT transcript (may be empty if STT was skipped or failed)"
+    )
+    keyframe_captions: list[str] = Field(
+        default_factory=list, description="Captions for extracted keyframes, in temporal order"
+    )
+    context: MediaContext | None = Field(
+        None, description="Resolved grounding context (transcript + keyframe captions)"
+    )
+    pipeline_stages: list[PipelineStageResult] = Field(
+        default_factory=list, description="Per-stage status with timing and warnings"
+    )
+    cost_estimate: CostEstimate = Field(..., description="Estimated LLM cost for this enrichment")
+    warnings: list[str] = Field(
+        default_factory=list, description="Non-fatal issues encountered across the pipeline"
+    )

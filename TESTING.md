@@ -336,6 +336,64 @@ Cost estimates are rough approximations based on:
 
 ---
 
+## Grout enrichment (`/enrich/short-form`, `/enrich/long-form`)
+
+These two endpoints enrich Grout's bulk, uncategorized media. They are covered
+by unit tests that stub the network / ffmpeg / LLM seams:
+
+```bash
+pytest tests/test_enrich_short_form.py tests/test_enrich_long_form.py
+```
+
+The long-form STT path and keyframe captioning cannot be fully exercised without
+the cluster (they hit `whisper-http` / `subgen` and a vision LLM). The unit
+tests substitute those seams, so a green run does **not** prove the live STT
+integration. Run the manual checks below from inside the cluster to close that
+gap.
+
+### Manual integration test (from inside the cluster)
+
+Short-form (no STT — filename + duration + operator context are enough):
+
+```bash
+curl -X POST http://tunabrain.arr.svc.cluster.local:5546/enrich/short-form \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "media": {"id": "grout-1", "title": "channel-ident-5e0ff26a", "duration_minutes": 1},
+        "categories": {
+          "audience": {"description": "Time-of-day suitability", "values": ["daytime", "latenight"]},
+          "channel":  {"description": "Target channel", "values": ["goldenreels", "toonotopia"]}
+        },
+        "existing_tags": []
+      }'
+# Expect: a response with `dimensions`, `tags`, and `context`.
+```
+
+Long-form (fetches the URL, transcribes, optionally captions keyframes, then
+categorizes + tags):
+
+```bash
+curl -X POST http://tunabrain.arr.svc.cluster.local:5546/enrich/long-form \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "media": {"id": "grout-2", "title": "some-video-essay", "duration_minutes": 12},
+        "source": {"url": "https://www.youtube.com/watch?v=..."},
+        "categories": {
+          "audience": {"description": "Time-of-day suitability", "values": ["daytime", "latenight"]}
+        },
+        "options": {"stt_backend": "auto", "enable_keyframe_analysis": true}
+      }'
+# Expect: a non-empty `transcript`, `keyframe_captions`, all six `pipeline_stages`
+# reported, and `context.source == "provided-summary"` with the transcript in
+# `context.summary`. Should complete in well under 5 minutes for a ~10-min video.
+```
+
+Backend selection can be forced per request via `options.stt_backend`
+(`whisper-http`, `subgen`, or `auto`). Verify each backend directly with the
+commands in the enrichment spec §4 before blaming the orchestrator.
+
+---
+
 ## Troubleshooting
 
 ### "No slots were scheduled"
@@ -400,6 +458,27 @@ curl http://localhost:11434/api/tags
    ```python
    scheduling_window_days=1  # Just one day
    ```
+
+### `/enrich/long-form` STT hangs or `whisper-http` `/health` fails
+
+If the whisper pod is running but `/health` returns non-200 or transcription
+calls hang, check the GPU lease. There was a known issue (May 2026) where the
+whisper pod was scheduled onto a GPU (it carries the
+`fudo.org/gpu.suitable-stt` label) but no `Lease` object was created in the
+`gpu-claims` namespace, because the `hermes-readonly` service account was
+missing `coordination.k8s.io/leases` read permission. The `hermes-secrets`
+deployment RBAC should already grant `leases` get/list/watch — verify it if
+this recurs. Not a Tunabrain bug, but it presents as long-form enrichment
+stalling on the STT stage.
+
+**Mitigations that don't require fixing the cluster:**
+- Force `options.stt_backend: "subgen"` to route around a wedged whisper pod
+  (subgen runs in the `arr` namespace and doesn't share the lease issue).
+- `auto` (the default) already probes both backends and prefers whichever
+  responds, so a hung whisper pod degrades to subgen automatically — but only if
+  whisper fails the 2s probe outright. A pod that accepts connections but never
+  responds can still stall; the pipeline's hard timeout
+  (`TUNABRAIN_ENRICH_LONG_TIMEOUT`, default 900s) is the backstop.
 
 4. **Fewer preferred slots**:
    ```python
