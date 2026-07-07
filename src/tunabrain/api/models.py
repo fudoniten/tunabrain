@@ -1114,3 +1114,109 @@ class EnrichLongFormResponse(BaseModel):
     warnings: list[str] = Field(
         default_factory=list, description="Non-fatal issues encountered across the pipeline"
     )
+
+
+# ============================================================================
+# Grout enrichment: /enrich/describe
+# ============================================================================
+#
+# A small, single-purpose endpoint that derives a display-ready title and a
+# short description from a media item that already carries a rough working
+# title (typically a filename, an on-disk path, or the literal "Unknown"). It
+# is the first step /enrich/short-form and /enrich/long-form orchestrate
+# internally, exposed publicly so callers can request describe-only enrichment
+# without paying for a full tag/dimension pass. Like the other enrichment
+# endpoints it reuses MediaItem, MediaContext, and CostEstimate verbatim.
+
+
+class EnrichDescribeRequest(BaseModel):
+    """Request to derive a clean title and short description for a media item.
+
+    The caller is responsible for providing a working ``title`` (typically
+    derived from the filename, the on-disk path, or a human-set value). The
+    model refines the title and produces a one-sentence description.
+
+    This endpoint is the public version of what ``/enrich/short-form`` and
+    ``/enrich/long-form`` orchestrate internally as the first step. It is
+    exposed publicly so other callers (e.g. Marquee's bulk-import UI) can
+    request describe-only enrichment without paying the cost of a full
+    tag/dimension pass.
+    """
+
+    media: MediaItem = Field(
+        ...,
+        description=(
+            "The media item to describe. ``media.title`` must be a non-empty "
+            "string (use the filename, the on-disk path, or the literal "
+            "'Unknown' when nothing else is available)."
+        ),
+    )
+    context: MediaContext | None = Field(
+        None,
+        description=(
+            "Optional grounding context. If supplied, the model uses it "
+            "instead of the Wikipedia auto-search. See /tags and /categorize "
+            "for the full MediaContext contract."
+        ),
+    )
+    debug: bool = Field(
+        False,
+        description="Enable debug logging for the LLM call.",
+    )
+
+    @model_validator(mode="after")
+    def _title_must_be_non_empty(self) -> EnrichDescribeRequest:
+        # The endpoint refines whatever title it is given but never invents one
+        # from nothing, so an empty/whitespace-only title is a request error
+        # (422) rather than something the model is asked to paper over.
+        if not self.media.title or not self.media.title.strip():
+            raise ValueError("media.title must be a non-empty string")
+        return self
+
+
+class DescribeMedia(BaseModel):
+    """The describe-only media result. Subset of MediaItem.
+
+    The full ``MediaItem`` is overkill for a describe response — the caller
+    already has the original item and is only interested in the two fields
+    the model can fill. Keeping this small avoids the impression that the
+    model rewrote the rest of the row.
+    """
+
+    id: str = Field(..., description="Echoed from the request.")
+    title: str = Field(..., description="The refined title.")
+    description: str | None = Field(
+        None,
+        description=(
+            "A one-sentence description. May be null when the model judges "
+            "a description would be noise (e.g. a 5-second bumper)."
+        ),
+    )
+
+
+class EnrichDescribeResponse(BaseModel):
+    """Describe-only enrichment response."""
+
+    media: DescribeMedia = Field(
+        ...,
+        description=(
+            "The refined media. ``id`` is echoed; ``title`` and ``description`` "
+            "are the model output."
+        ),
+    )
+    context: MediaContext = Field(
+        default_factory=MediaContext,
+        description=(
+            "Resolved grounding context actually used. Echoed back so the "
+            "caller can store and correct it (same pattern as /tags and "
+            "/categorize)."
+        ),
+    )
+    cost_estimate: CostEstimate = Field(
+        ...,
+        description="Cost estimate for the LLM call(s) made.",
+    )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Non-fatal issues (e.g. description was filtered).",
+    )
