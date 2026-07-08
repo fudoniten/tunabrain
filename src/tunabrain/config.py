@@ -50,6 +50,15 @@ class Settings:
     scratch_dir: str = "/tmp/tunabrain-scratch"
     enrich_long_timeout: int = 900
 
+    # --- Grounding / context resolution ---
+    # When True, media with no supplied grounding falls back to a Wikipedia
+    # auto-search on the title. Most of Grout's free-form media has no notable
+    # Wikipedia page (anything with an IMDB id goes to Jellyfin instead), so a
+    # deployment can disable the auto-search wholesale and rely on transcript /
+    # keyframe / operator-supplied grounding only. The per-search relevance gate
+    # already discards bad matches when this is left on.
+    enable_wikipedia_search: bool = True
+
 
 def _env_flag(name: str, default: bool = False) -> bool:
     """Return a boolean flag controlled by an environment variable."""
@@ -87,6 +96,7 @@ def get_settings() -> Settings:
         stt_whisper_model=os.getenv("TUNABRAIN_STT_WHISPER_MODEL", "turbo"),
         scratch_dir=os.getenv("TUNABRAIN_SCRATCH_DIR", "/tmp/tunabrain-scratch"),
         enrich_long_timeout=int(os.getenv("TUNABRAIN_ENRICH_LONG_TIMEOUT", "900")),
+        enable_wikipedia_search=_env_flag("TUNABRAIN_ENABLE_WIKIPEDIA_SEARCH", True),
     )
     logger.info(
         "Loaded settings: provider=%s model=%s (shows=%s episodes=%s schedule=%s bumpers=%s) debug=%s", 

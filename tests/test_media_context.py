@@ -135,6 +135,35 @@ async def test_resolve_auto_search_returns_matched_page():
 
 
 @pytest.mark.anyio
+async def test_resolve_skips_search_for_placeholder_title():
+    # A title that reduces to a placeholder must never drive a search — this is
+    # the "<unnamed>" -> "Unnamed Memory" bug.
+    for junk in ("Unknown", "<unnamed>", "Untitled", "12345"):
+        StubWikipediaLookup.instances = []
+        resolved = await resolve_media_context(_media(junk), None)
+        assert resolved.output.source == "none"
+        assert resolved.grounding_text == NO_CONTEXT_TEXT
+        # No WikipediaLookup was even constructed.
+        assert not StubWikipediaLookup.instances
+
+
+@pytest.mark.anyio
+async def test_resolve_skips_search_when_disabled(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        context_module,
+        "get_settings",
+        lambda: SimpleNamespace(enable_wikipedia_search=False),
+    )
+    # A real (non-placeholder) title, but the auto-search is disabled globally.
+    resolved = await resolve_media_context(_media("Juice"), None)
+    assert resolved.output.source == "none"
+    assert resolved.grounding_text == NO_CONTEXT_TEXT
+    assert not StubWikipediaLookup.instances
+
+
+@pytest.mark.anyio
 async def test_resolve_handles_no_match(monkeypatch):
     class NoMatchLookup(StubWikipediaLookup):
         async def resolve_async(self, *, name, year=None, imdb_id=None, llm=None):

@@ -95,6 +95,9 @@ _SYSTEM_PROMPT = (
     "- Write the description as a single concise sentence grounded in the title "
     "and context. Set description to null when a description would be noise, e.g. "
     "for a very short bumper, ident, or filler with no real content.\n"
+    "- The grounding context (a transcript, keyframe captions, or operator notes) "
+    "describes the ACTUAL media. When it conflicts with what the raw title seems "
+    "to imply, trust the context and describe what the media actually is.\n"
     "- Keep both fields free of markup and quoting."
 )
 
