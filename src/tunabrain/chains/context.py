@@ -21,6 +21,8 @@ import logging
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from tunabrain.api.models import MediaContext, MediaItem
+from tunabrain.config import get_settings
+from tunabrain.tools.titles import is_placeholder_title
 from tunabrain.tools.wikipedia import (
     WikipediaLookup,
     page_title_from_url,
@@ -149,6 +151,23 @@ async def resolve_media_context(
         )
 
     # 4. Automatic Wikipedia search (only when no usable override was given).
+    # Two guards keep the auto-search from inventing bad grounding:
+    #   - a deployment can disable it wholesale (most of Grout's media is not on
+    #     Wikipedia, so the search is noise there); and
+    #   - a placeholder title ("Unknown", "<unnamed>", a bare filename that
+    #     reduces to nothing) must never drive a search — that is exactly how
+    #     "<unnamed>" ended up matching the anime "Unnamed Memory".
+    if not get_settings().enable_wikipedia_search:
+        logger.info(
+            "Wikipedia auto-search disabled; no external grounding for %r", media.title
+        )
+        return ResolvedContext(NO_CONTEXT_TEXT, MediaContext(source="none"))
+    if is_placeholder_title(media.title):
+        logger.info(
+            "Skipping Wikipedia auto-search for placeholder title %r", media.title
+        )
+        return ResolvedContext(NO_CONTEXT_TEXT, MediaContext(source="none"))
+
     wikipedia = WikipediaLookup(debug=debug, llm=llm)
     try:
         result = await wikipedia.resolve_async(
