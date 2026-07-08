@@ -16,6 +16,8 @@ from tunabrain.api.models import (
     EnrichDescribeResponse,
     EnrichLongFormRequest,
     EnrichLongFormResponse,
+    EnrichProfileRequest,
+    EnrichProfileResponse,
     EnrichShortFormRequest,
     EnrichShortFormResponse,
     EpisodeSpecialFlagRequest,
@@ -43,6 +45,7 @@ from tunabrain.chains.bumpers import generate_bumpers
 from tunabrain.chains.categorization import categorize_media
 from tunabrain.chains.channel_mapping import map_media_to_channels
 from tunabrain.chains.describe import describe_media
+from tunabrain.chains.directory_enrichment import enrich_profile
 from tunabrain.chains.enrich_long import run_enrich_long_form
 from tunabrain.chains.enrich_short import run_enrich_short_form
 from tunabrain.chains.episode_flagging import generate_episode_flags
@@ -202,6 +205,33 @@ async def enrich_describe(request: EnrichDescribeRequest) -> EnrichDescribeRespo
         "Describe enrichment complete for '%s' -> title='%s'",
         request.media.title,
         response.media.title,
+    )
+    return response
+
+
+@router.post("/enrich/profile", response_model=EnrichProfileResponse)
+async def enrich_profile_endpoint(request: EnrichProfileRequest) -> EnrichProfileResponse:
+    """Derive one shared metadata profile for a GROUP of related media.
+
+    Directory / tag-group enrichment: a single LLM call derives dimensions +
+    tags for a whole group (a directory, creator, series, or any cross-cutting
+    concept) from the group's name and a sample of its filenames. Callers fan
+    the result out to every child item, so a large well-organised library is
+    enriched at group granularity — one call per group — instead of paying for
+    a per-file /enrich/short-form call across the whole corpus. No STT, no
+    per-item MediaItem: filenames are the only content signal.
+    """
+    logger.info(
+        "Processing profile enrichment for concept='%s' (%s sample filenames)",
+        request.concept_name,
+        len(request.sample_filenames),
+    )
+    response = await enrich_profile(request)
+    logger.info(
+        "Profile enrichment complete for '%s': %s dimensions, %s tags",
+        request.concept_name,
+        len(response.dimensions),
+        len(response.tags),
     )
     return response
 
