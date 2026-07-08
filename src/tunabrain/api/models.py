@@ -1234,3 +1234,103 @@ class EnrichDescribeResponse(BaseModel):
         default_factory=list,
         description="Non-fatal issues (e.g. description was filtered).",
     )
+
+
+# ============================================================================
+# Grout enrichment: /enrich/profile (directory / tag-group profiling)
+# ============================================================================
+#
+# A single-call endpoint that derives a shared scheduling profile (dimensions +
+# tags) for a *group* of related media, from the group's name and a small
+# sample of its filenames. It exists so a large, well-organised library (e.g.
+# 200k YouTube pulls laid out one directory per channel) can be enriched at the
+# group level — one LLM call per directory — instead of paying for a per-file
+# /enrich/short-form call across the whole corpus. Every child item then
+# inherits the group's profile downstream (in Grout).
+#
+# Unlike /categorize and /enrich/short-form, this endpoint sees NO single media
+# item: filenames are the only content signal, and the prompt is explicit that
+# the model must not hallucinate beyond what the names support. It reuses
+# CostEstimate verbatim and never touches the existing enrichment schemas.
+
+
+class EnrichProfileRequest(BaseModel):
+    """Request to derive a shared metadata profile for a group of related media.
+
+    The group is identified by a human-readable ``concept_name`` (typically a
+    channel / creator / series / directory name) and grounded on a small
+    ``sample_filenames`` list. There is no per-item ``MediaItem`` — the whole
+    point is to classify the group once and let the caller fan the result out
+    to every member.
+    """
+
+    concept_name: str = Field(
+        ...,
+        description=(
+            "Human-readable name of the group, e.g. a channel/creator/series/"
+            "directory name ('Adam Neely Music'). This is the primary signal."
+        ),
+    )
+    sample_filenames: list[str] = Field(
+        default_factory=list,
+        description=(
+            "A sample of filenames drawn from the group. The only per-item "
+            "content signal the model gets; keep it small (5 is typical)."
+        ),
+    )
+    sample_count: int = Field(
+        5,
+        ge=1,
+        description=(
+            "The number of filenames the caller intended to sample. Informational "
+            "— the prompt grounds on whatever ``sample_filenames`` actually holds."
+        ),
+    )
+    debug: bool = Field(
+        False, description="Enable debug logging for the outgoing LLM call."
+    )
+
+    @model_validator(mode="after")
+    def _sample_filenames_non_empty(self) -> EnrichProfileRequest:
+        # Filenames are the only content signal; with none, the model would be
+        # guessing purely from the concept name. Reject rather than paper over
+        # it (surfaces as a 422 at the route), matching /enrich/describe's
+        # empty-title contract.
+        if not self.sample_filenames:
+            raise ValueError("sample_filenames must not be empty")
+        return self
+
+
+class EnrichProfileResponse(BaseModel):
+    """Shared profile derived for a media group.
+
+    ``dimensions`` is a plain ``{dimension: [values]}`` map (not the richer
+    ``DimensionSelection`` list) because the caller fans it out verbatim to a
+    whole directory of items — the per-value ``notes`` that ``/categorize``
+    returns would be meaningless applied group-wide.
+    """
+
+    concept_name: str = Field(..., description="Echoed from the request.")
+    dimensions: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description=(
+            "Derived dimension selections, e.g. {'channel': ['muse'], "
+            "'audience': ['adult']}. Only confident dimensions are set; unclear "
+            "ones are omitted."
+        ),
+    )
+    tags: list[str] = Field(
+        default_factory=list,
+        description="3-7 short lowercase-hyphenated free-form tags describing the group.",
+    )
+    grounding_source: str = Field(
+        "filename-pattern",
+        description="Where the profile was grounded. Always 'filename-pattern' in v1.",
+    )
+    cost_estimate: CostEstimate = Field(
+        ..., description="Estimated LLM cost for the single profiling call."
+    )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Non-fatal issues (e.g. the model output degraded to a partial result).",
+    )
