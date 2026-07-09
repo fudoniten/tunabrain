@@ -140,8 +140,31 @@ class RuntimeBucket(_WireModel):
 
     label: str = Field(..., description="e.g. '20-30min'")
     min_minutes: int = Field(..., ge=0)
-    max_minutes: int = Field(..., ge=0)
+    max_minutes: int | None = Field(
+        None, description="None for the open-ended top bucket (e.g. '210+min')"
+    )
     item_count: int = Field(..., ge=0)
+
+
+class TagAggregate(_WireModel):
+    """Per-tag rollup in the dimension model (e.g. 'genre:comedy',
+    'channel:goldenreels') — the generalization of the deprecated ``genres``
+    field to any dimension, not just genre."""
+
+    tag: str
+    show_count: int = Field(..., ge=0)
+    episode_count: int = Field(..., ge=0)
+
+
+class TagRuntimeHistogram(_WireModel):
+    """Runtime distribution for one tag (e.g. 'genre:movie', 'genre:sitcom'),
+    for slot-fit reasoning within a specific ``random:<category>`` pool rather
+    than the catalog as a whole. A movie pool and a sitcom pool can have wildly
+    different runtime distributions — ``CatalogProfile.runtime_histogram``
+    alone can't answer "does *this* category have content at *this* length"."""
+
+    tag: str
+    buckets: list[RuntimeBucket] = Field(default_factory=list)
 
 
 class CatalogProfile(_WireModel):
@@ -160,7 +183,9 @@ class CatalogProfile(_WireModel):
     movie_count: int = Field(0, ge=0)
     shows: list[ShowProfile] = Field(default_factory=list)
     genres: list[GenreProfile] = Field(default_factory=list)
+    tag_aggregates: list[TagAggregate] = Field(default_factory=list)
     runtime_histogram: list[RuntimeBucket] = Field(default_factory=list)
+    tag_runtime_histograms: list[TagRuntimeHistogram] = Field(default_factory=list)
     generated_at: datetime | None = Field(
         None, description="When Pseudovision produced the underlying aggregate"
     )
