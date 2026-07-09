@@ -252,6 +252,119 @@ async def test_propose_quarterly_grid_runs_two_passes(_mock_llm):
     assert {s.daypart for s in grid.strips} == {"daytime", "prime", "overnight"}
 
 
+# --- split round-trip (DURATION_AWARE_SCHEDULING.md §4.3, Option A) --------
+
+
+def test_render_candidate_menu_empty_is_blank():
+    assert qg.render_candidate_menu([]) == ""
+    assert qg.render_candidate_menu(None) == ""  # type: ignore[arg-type]
+
+
+def test_render_candidate_menu_renders_layouts_and_inventory():
+    from tunabrain.scheduling.grid import CandidateSlot, DaypartCandidate
+
+    candidates = [
+        DaypartCandidate(
+            layout_id="genre-movie-90-105min",
+            weight=12.0,
+            slots=[
+                CandidateSlot(duration_minutes=90, category="movie", available_count=12),
+            ],
+        ),
+        DaypartCandidate(
+            layout_id="genre-sitcom-15-30min",
+            weight=200.0,
+            slots=[
+                CandidateSlot(duration_minutes=30, category="sitcom", available_count=200),
+                CandidateSlot(duration_minutes=30, category="sitcom", available_count=200),
+            ],
+        ),
+    ]
+    menu = qg.render_candidate_menu(candidates)
+    assert "genre-movie-90-105min" in menu
+    assert "90min movie" in menu
+    assert "x12 available" in menu
+    assert "genre-sitcom-15-30min" in menu
+    assert "30min sitcom" in menu
+
+
+def test_strip_fill_prompt_includes_candidate_menu_when_supplied():
+    from tunabrain.scheduling.grid import CandidateSlot, DaypartBlock, DaypartCandidate
+
+    block = DaypartBlock(name="prime", start="20:00", end="22:00", role="movie night")
+    candidates = [
+        DaypartCandidate(
+            layout_id="movie-90min",
+            weight=12.0,
+            slots=[CandidateSlot(duration_minutes=90, category="movie", available_count=12)],
+        )
+    ]
+    with_menu = qg.build_strip_fill_prompt(_request(), block, [], candidates=candidates)
+    without_menu = qg.build_strip_fill_prompt(_request(), block, [], candidates=None)
+
+    assert "DURATION-FEASIBLE SLOT MENU" in with_menu[1]["content"]
+    assert "movie-90min" in with_menu[1]["content"]
+    assert "prefer strip lengths" in with_menu[0]["content"]  # system-prompt rule added
+
+    assert "DURATION-FEASIBLE SLOT MENU" not in without_menu[1]["content"]
+    assert "prefer strip lengths" not in without_menu[0]["content"]
+
+
+async def test_propose_daypart_skeleton_and_strip_fill_compose_like_propose_quarterly_grid(
+    _mock_llm,
+):
+    """The split functions, called directly across "two round trips", should
+    produce the identical result propose_quarterly_grid gets from calling them
+    internally in one call — the whole point of the refactor being additive."""
+    skeleton, skeleton_calls = await qg.propose_daypart_skeleton(_request())
+    assert len(skeleton.blocks) == 3
+    assert skeleton_calls == 1
+
+    all_strips: list[GridStrip] = []
+    total_calls = skeleton_calls
+    for block in skeleton.blocks:
+        strips, calls = await qg.propose_strip_fill(_request(), block, all_strips)
+        total_calls += calls
+        all_strips.extend(strips)
+
+    assert total_calls == 4
+    assert len(all_strips) == 3
+    assert {s.daypart for s in all_strips} == {"daytime", "prime", "overnight"}
+
+
+async def test_propose_strip_fill_accepts_narrower_strip_fill_request(_mock_llm):
+    """The real split-round-trip caller (tunarr-scheduler) sends a
+    StripFillRequest, not a full QuarterlyGridRequest — build_strip_fill_prompt
+    only needs the fields the two share, so this must work identically."""
+    from tunabrain.api.models import StripFillRequest
+    from tunabrain.scheduling.grid import DaypartBlock
+
+    block = DaypartBlock(name="prime", start="17:00", end="22:00", role="marquee sitcoms")
+    request = StripFillRequest(
+        channel=ChannelContext(name="Classic Comedy", description="24/7 vintage sitcoms"),
+        catalog_profile=_profile(),
+        block=block,
+        candidates=[],
+        prior_strips=[],
+    )
+    strips, calls = await qg.propose_strip_fill(request, block, [])
+    assert calls == 1
+    assert len(strips) == 1
+    assert strips[0].content.media_id == "series:seinfeld"
+
+
+async def test_propose_daypart_skeleton_accepts_narrower_skeleton_request(_mock_llm):
+    from tunabrain.api.models import DaypartSkeletonRequest
+
+    request = DaypartSkeletonRequest(
+        channel=ChannelContext(name="Classic Comedy", description="24/7 vintage sitcoms"),
+        catalog_profile=_profile(),
+    )
+    skeleton, calls = await qg.propose_daypart_skeleton(request)
+    assert calls == 1
+    assert len(skeleton.blocks) == 3
+
+
 def test_invoke_json_truncation_raises_actionable_error(monkeypatch):
     """A length-limit truncation surfaces a clear ValueError, not a raw 500."""
     from openai import LengthFinishReasonError

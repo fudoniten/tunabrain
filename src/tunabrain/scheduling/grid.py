@@ -240,6 +240,43 @@ class DaypartSkeleton(_WireModel):
     blocks: list[DaypartBlock] = Field(default_factory=list)
 
 
+# ---------------------------------------------------------------------------
+# 1b. DaypartCandidate  (Tunarr Scheduler -> Tunabrain, Pass B input only)
+#
+# Built by Tunarr Scheduler's scheduling/candidates.clj from the dimensioned
+# runtime histogram (CatalogProfile.tag_runtime_histograms), AFTER Pass A has
+# produced real daypart bounds — never invented by Tunabrain, never computed
+# here. Handed into propose_strip_fill as a menu of duration-feasible ways to
+# tile the block, so the LLM has real inventory to work from instead of
+# inventing strip lengths freehand. See DURATION_AWARE_SCHEDULING.md §4.2
+# (tunarr-scheduler repo).
+# ---------------------------------------------------------------------------
+
+
+class CandidateSlot(_WireModel):
+    """One tile within a DaypartCandidate layout."""
+
+    duration_minutes: int = Field(..., ge=0)
+    category: str = Field(
+        ..., description="e.g. 'movie', 'sitcom' — matches a random:<category> pool"
+    )
+    available_count: int = Field(
+        ..., ge=0, description="Items in this category within tolerance of duration_minutes"
+    )
+
+
+class DaypartCandidate(_WireModel):
+    """One duration-feasible way to tile a daypart block. `slots` tile the
+    block's full span contiguously; `weight` is proportional to how well the
+    layout's slots are stocked, for relative sampling frequency across
+    proposals — a layout backed by 3 items should be offered far less often
+    than one backed by 200."""
+
+    layout_id: str
+    slots: list[CandidateSlot] = Field(default_factory=list)
+    weight: float = Field(0.0, ge=0)
+
+
 class Grid(_WireModel):
     """A channel's complete frozen weekly grid (the base layer).
 
