@@ -148,4 +148,10 @@ cross-midnight, default fill).
 - Richer override scopes ("2nd Tuesday", "last Friday") beyond specific-date and
   weekday-pattern.
 - The `query_media_count` pull tool (Phase 7) for feasibility questions the
-  `CatalogProfile` did not pre-answer.
+  `CatalogProfile` did not pre-answer. A design proposal for this — a
+  precomputed per-daypart duration-feasible slot menu instead of an ad hoc
+  pull tool, to keep Tunabrain stateless and capacity math out of the LLM's
+  hands — lives in tunarr-scheduler's `DURATION_AWARE_SCHEDULING.md` (Phase 3).
+  It also proposes dimensioning `CatalogProfile.runtime_histogram` per tag
+  (`TagRuntimeHistogram`) and a new feasibility duration-fit finding, both
+  extensions to the contracts in this file rather than replacements.
