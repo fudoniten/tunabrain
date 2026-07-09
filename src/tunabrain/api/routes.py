@@ -20,6 +20,8 @@ from tunabrain.api.models import (
     EnrichProfileResponse,
     EnrichShortFormRequest,
     EnrichShortFormResponse,
+    DaypartSkeletonRequest,
+    DaypartSkeletonResponse,
     EpisodeSpecialFlagRequest,
     EpisodeSpecialFlagResponse,
     MonthlyOverridesRequest,
@@ -34,6 +36,8 @@ from tunabrain.api.models import (
     QuarterlyStrategyResponse,
     ScheduleRequest,
     ScheduleResponse,
+    StripFillRequest,
+    StripFillResponse,
     TagAuditRequest,
     TagAuditResponse,
     TaggingRequest,
@@ -57,7 +61,9 @@ from tunabrain.scheduling.cost import calculate_cost
 from tunabrain.scheduling.monthly_overrides import propose_monthly_overrides
 from tunabrain.scheduling.monthly_strategy import generate_monthly_strategy_agent_loop
 from tunabrain.scheduling.quarterly_grid import (
+    propose_daypart_skeleton,
     propose_quarterly_grid,
+    propose_strip_fill,
     repair_quarterly_grid,
 )
 from tunabrain.scheduling.quarterly_strategy import generate_quarterly_strategy
@@ -496,6 +502,89 @@ async def get_monthly_strategy(request: MonthlyStrategyRequest) -> MonthlyStrate
     except Exception as e:
         logger.error(f"Unexpected error generating monthly strategy: {e}")
         raise
+
+
+@router.post(
+    "/api/scheduling/propose-daypart-skeleton", response_model=DaypartSkeletonResponse
+)
+async def propose_daypart_skeleton_route(
+    request: DaypartSkeletonRequest,
+) -> DaypartSkeletonResponse:
+    """Propose Pass A only: the coarse dayparting for a channel.
+
+    Split-round-trip alternative to propose-quarterly-grid (see
+    DURATION_AWARE_SCHEDULING.md §4.3, Option A): call this first to get real
+    daypart bounds, compute a duration-feasible candidate menu per block from
+    the catalog's runtime histogram, then call propose-strip-fill once per
+    block with that menu attached.
+
+    HTTP Responses:
+        200: Skeleton proposed successfully
+        400: Invalid request
+        500: LLM invocation failed or response invalid
+    """
+    logger.info(
+        "Proposing daypart skeleton for channel='%s' (%s shows in profile)",
+        request.channel.name,
+        len(request.catalog_profile.shows),
+    )
+    skeleton, llm_calls = await propose_daypart_skeleton(request)
+    cost_usd = calculate_cost(
+        model="gpt-4o-mini",
+        prompt_tokens=1500 * llm_calls,
+        completion_tokens=1000 * llm_calls,
+    )
+    return DaypartSkeletonResponse(
+        skeleton=skeleton,
+        cost_estimate={
+            "estimated_cost_usd": cost_usd,
+            "llm_calls_used": llm_calls,
+            "estimated_tokens": f"~{2500 * llm_calls}",
+            "provider": "openrouter",
+            "model": "gpt-4o-mini",
+        },
+    )
+
+
+@router.post("/api/scheduling/propose-strip-fill", response_model=StripFillResponse)
+async def propose_strip_fill_route(request: StripFillRequest) -> StripFillResponse:
+    """Propose Pass B for ONE daypart block, against its candidate menu.
+
+    Call once per block returned by propose-daypart-skeleton, threading
+    `prior_strips` forward for cross-daypart coherence (same role
+    propose-quarterly-grid's internal loop plays for the single-call path).
+
+    HTTP Responses:
+        200: Strips proposed successfully (an empty list is valid — the
+             caller should warn, not fail, same as propose-quarterly-grid)
+        400: Invalid request
+        500: LLM invocation failed or response invalid
+    """
+    logger.info(
+        "Proposing strip fill for channel='%s' daypart='%s' (%s candidates, %s prior strips)",
+        request.channel.name,
+        request.block.name,
+        len(request.candidates),
+        len(request.prior_strips),
+    )
+    strips, llm_calls = await propose_strip_fill(
+        request, request.block, request.prior_strips, candidates=request.candidates
+    )
+    cost_usd = calculate_cost(
+        model="gpt-4o-mini",
+        prompt_tokens=1500 * llm_calls,
+        completion_tokens=1000 * llm_calls,
+    )
+    return StripFillResponse(
+        strips=strips,
+        cost_estimate={
+            "estimated_cost_usd": cost_usd,
+            "llm_calls_used": llm_calls,
+            "estimated_tokens": f"~{2500 * llm_calls}",
+            "provider": "openrouter",
+            "model": "gpt-4o-mini",
+        },
+    )
 
 
 @router.post("/api/scheduling/propose-quarterly-grid", response_model=QuarterlyGridResponse)

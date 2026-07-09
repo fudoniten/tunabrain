@@ -25,8 +25,10 @@ import random
 from openai import LengthFinishReasonError
 
 from tunabrain.api.models import (
+    DaypartSkeletonRequest,
     QuarterlyGridRepairRequest,
     QuarterlyGridRequest,
+    StripFillRequest,
 )
 from tunabrain.config import get_settings
 from tunabrain.llm import LLMTask, get_chat_model
@@ -34,6 +36,7 @@ from tunabrain.scheduling.grid import (
     CatalogProfile,
     Content,
     DaypartBlock,
+    DaypartCandidate,
     DaypartSkeleton,
     Grid,
     GridStrip,
@@ -124,7 +127,9 @@ def summarize_catalog_profile(
     return "\n".join(lines)
 
 
-def build_daypart_skeleton_prompt(request: QuarterlyGridRequest) -> list[dict]:
+def build_daypart_skeleton_prompt(
+    request: QuarterlyGridRequest | DaypartSkeletonRequest,
+) -> list[dict]:
     """Pass A: propose the coarse dayparting for the channel."""
     theme = (
         f"\nQUARTERLY THEME (for coherence): {request.quarterly_theme}"
@@ -174,12 +179,47 @@ Produce 4-5 contiguous dayparts covering the whole broadcast day."""
     ]
 
 
+def render_candidate_menu(candidates: list[DaypartCandidate]) -> str:
+    """Render a precomputed slot-tiling menu for the strip-fill prompt.
+
+    Each candidate is a duration-feasible way to tile the daypart, built by
+    Tunarr Scheduler's scheduling/candidates.clj from the catalog's real
+    per-tag runtime histogram against this exact block's bounds — never
+    invented by the LLM. Guiding the model toward these lengths (rather than
+    letting it invent arbitrary ones) is the whole point of splitting
+    proposal into two round trips; see DURATION_AWARE_SCHEDULING.md §4.2-4.4.
+
+    Empty/absent input renders nothing, so a call with no candidates degrades
+    to exactly today's unconstrained behavior."""
+    if not candidates:
+        return ""
+    lines = [
+        "\nDURATION-FEASIBLE SLOT MENU (built from real inventory for this exact "
+        "daypart — prefer these lengths over inventing your own; a length not "
+        "listed here may have no matching-length content in that category):"
+    ]
+    for c in candidates:
+        slot_bits = ", ".join(
+            f"{s.duration_minutes}min {s.category} (x{s.available_count} available)"
+            for s in c.slots
+        )
+        lines.append(f"  - {c.layout_id}: {slot_bits}")
+    return "\n".join(lines)
+
+
 def build_strip_fill_prompt(
-    request: QuarterlyGridRequest,
+    request: QuarterlyGridRequest | StripFillRequest,
     block: DaypartBlock,
     prior_strips: list[GridStrip],
+    *,
+    candidates: list[DaypartCandidate] | None = None,
 ) -> list[dict]:
-    """Pass B: fill concrete recurring strips within one daypart block."""
+    """Pass B: fill concrete recurring strips within one daypart block.
+
+    `candidates`, when supplied (the split-round-trip path — see
+    `propose_strip_fill`), is rendered as a duration-feasible menu the model
+    is instructed to prefer. Omitted or empty is unconstrained, identical to
+    the original single-call behavior."""
     prior = ""
     if prior_strips:
         prior_lines = [
@@ -190,14 +230,22 @@ def build_strip_fill_prompt(
             "avoid clashing choices):\n" + "\n".join(prior_lines)
         )
 
-    system_prompt = """You are filling concrete recurring STRIPS within ONE daypart of a frozen weekly grid.
+    menu = render_candidate_menu(candidates or [])
+    menu_rule = (
+        "\n- A DURATION-FEASIBLE SLOT MENU is provided below; prefer strip lengths "
+        "from it over inventing your own."
+        if menu
+        else ""
+    )
+
+    system_prompt = f"""You are filling concrete recurring STRIPS within ONE daypart of a frozen weekly grid.
 
 A strip is a recurring rule, not a dated slot: "weekdays 17:00-18:00 -> Seinfeld" covers every matching weekday all quarter.
 
 Respond in valid JSON ONLY:
-{
+{{
   "strips": [
-    {
+    {{
       "days": "daily" | "weekdays" | "weekends" | ["mon","wed","fri", ...],
       "start": "HH:MM",
       "end": "HH:MM (end <= start wraps past midnight)",
@@ -205,15 +253,15 @@ Respond in valid JSON ONLY:
       "strategy": "sequential | random | specific",
       "category_filters": ["string", ...],
       "label": "string (short, for the GUI)"
-    }
+    }}
   ]
-}
+}}
 
 RULES:
 - Every strip must lie WITHIN this daypart's time bounds.
 - Strips within the daypart must not overlap each other.
 - Prefer 'sequential' for a single series stripped across days; 'random' for a rotating pool.
-- Choose shows that plausibly have enough episodes for the strip's weekly frequency (do not do precise math; a downstream checker validates capacity).
+- Choose shows that plausibly have enough episodes for the strip's weekly frequency (do not do precise math; a downstream checker validates capacity).{menu_rule}
 - Return ONLY JSON, no markdown."""
 
     user_prompt = f"""Channel: "{request.channel.name}" - {request.channel.description}
@@ -224,6 +272,7 @@ DAYPART TO FILL:
   role: {block.role}
   genre focus: {", ".join(block.genre_focus) if block.genre_focus else "(none specified)"}
 {prior}
+{menu}
 
 AVAILABLE MEDIA (shape only):
 {summarize_catalog_profile(request.catalog_profile, max_shows=get_settings().schedule_max_shows)}
@@ -425,43 +474,84 @@ def _parse_strips(channel: str, daypart: str, payload: dict, start_index: int) -
 # ---------------------------------------------------------------------------
 
 
-async def propose_quarterly_grid(
-    request: QuarterlyGridRequest,
-) -> tuple[Grid, DaypartSkeleton, list[str], int]:
-    """Run Pass A (dayparting) then Pass B (strip fill per daypart).
+async def propose_daypart_skeleton(
+    request: QuarterlyGridRequest | DaypartSkeletonRequest,
+) -> tuple[DaypartSkeleton, int]:
+    """Pass A only: propose the coarse dayparting for a channel.
+
+    Split out of the original propose_quarterly_grid so Tunarr Scheduler can
+    see real daypart bounds *before* Pass B runs, and compute a duration-
+    feasible candidate menu from them (scheduling/candidates.clj) to hand
+    into `propose_strip_fill` per block — see DURATION_AWARE_SCHEDULING.md
+    §4.3 (Option A: two round trips). `propose_quarterly_grid` below calls
+    this internally and is otherwise unchanged.
 
     Returns:
-        (grid, skeleton, warnings, llm_calls)
+        (skeleton, llm_calls)
     """
     logger.info(
-        "Proposing quarterly grid for channel '%s' (%s shows in profile)",
+        "Proposing daypart skeleton for channel '%s' (%s shows in profile)",
         request.channel.name,
         len(request.catalog_profile.shows),
     )
-    warnings: list[str] = []
-
-    # Pass A - dayparting skeleton (one small call). The budget must leave room
-    # for reasoning models to "think" before emitting JSON, hence well above the
-    # few hundred tokens the skeleton itself needs.
+    # The budget must leave room for reasoning models to "think" before
+    # emitting JSON, hence well above the few hundred tokens the skeleton
+    # itself needs.
     skeleton_payload = _invoke_json(
         build_daypart_skeleton_prompt(request), max_tokens=10000, temperature=0.3
     )
     skeleton = _parse_skeleton(request.channel.name, skeleton_payload)
     logger.info("Dayparting produced %s blocks", len(skeleton.blocks))
-    llm_calls = 1
+    return skeleton, 1
 
-    # Pass B - fill strips per daypart (one small call each), seeded with prior strips
+
+async def propose_strip_fill(
+    request: QuarterlyGridRequest | StripFillRequest,
+    block: DaypartBlock,
+    prior_strips: list[GridStrip],
+    *,
+    candidates: list[DaypartCandidate] | None = None,
+) -> tuple[list[GridStrip], int]:
+    """Pass B for ONE daypart block.
+
+    `candidates`, when supplied, is the precomputed duration-feasible slot
+    menu for this exact block (see `render_candidate_menu`); omitted or empty
+    is unconstrained, identical to `propose_quarterly_grid`'s original
+    per-block behavior.
+
+    Returns:
+        (strips, llm_calls)
+    """
+    payload = _invoke_json(
+        build_strip_fill_prompt(request, block, prior_strips, candidates=candidates),
+        max_tokens=10000,
+        temperature=0.4,
+    )
+    block_strips = _parse_strips(request.channel.name, block.name, payload, len(prior_strips))
+    return block_strips, 1
+
+
+async def propose_quarterly_grid(
+    request: QuarterlyGridRequest,
+) -> tuple[Grid, DaypartSkeleton, list[str], int]:
+    """Run Pass A (dayparting) then Pass B (strip fill per daypart) as a
+    single call, composed from `propose_daypart_skeleton` + `propose_strip_fill`
+    with no candidate menu (unconstrained strip-fill, exactly the original
+    behavior). Callers that want the candidate-menu path call those two
+    functions directly across two round trips instead — see
+    DURATION_AWARE_SCHEDULING.md §4.3.
+
+    Returns:
+        (grid, skeleton, warnings, llm_calls)
+    """
+    warnings: list[str] = []
+
+    skeleton, llm_calls = await propose_daypart_skeleton(request)
+
     all_strips: list[GridStrip] = []
     for block in skeleton.blocks:
-        payload = _invoke_json(
-            build_strip_fill_prompt(request, block, all_strips),
-            max_tokens=10000,
-            temperature=0.4,
-        )
-        llm_calls += 1
-        block_strips = _parse_strips(
-            request.channel.name, block.name, payload, len(all_strips)
-        )
+        block_strips, calls = await propose_strip_fill(request, block, all_strips)
+        llm_calls += calls
         if not block_strips:
             warnings.append(f"Daypart '{block.name}' returned no strips")
         all_strips.extend(block_strips)

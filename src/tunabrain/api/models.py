@@ -7,9 +7,12 @@ from pydantic import BaseModel, Field, model_validator
 
 from tunabrain.scheduling.grid import (
     CatalogProfile,
+    DaypartBlock,
+    DaypartCandidate,
     DaypartSkeleton,
     FeasibilityReport,
     Grid,
+    GridStrip,
     Override,
 )
 
@@ -852,6 +855,77 @@ class QuarterlyGridResponse(BaseModel):
     )
     cost_estimate: CostEstimate = Field(...)
     suggested_next_steps: list[str] = Field(default_factory=list)
+
+
+# ============================================================================
+# Split-round-trip grid proposal (DURATION_AWARE_SCHEDULING.md §4.3, Option A)
+#
+# propose-quarterly-grid above runs both passes in one call, so Tunarr
+# Scheduler never sees daypart bounds until the whole grid comes back — too
+# late to hand Pass B a duration-feasible candidate menu tiled to each
+# block's REAL bounds. These two endpoints split proposal into two round
+# trips: Pass A alone, then Pass B once per daypart with that daypart's
+# candidates attached. propose-quarterly-grid is unchanged and still valid
+# for callers that don't need the candidate menu.
+# ============================================================================
+
+
+class DaypartSkeletonRequest(BaseModel):
+    """Pass A only: propose the coarse dayparting for a channel."""
+
+    channel: ChannelContext = Field(..., description="Channel to author a grid for")
+    catalog_profile: CatalogProfile = Field(
+        ..., description="The shape of available media for this channel"
+    )
+    quarterly_theme: str | None = Field(
+        None,
+        description="Optional creative theme from the quarterly-strategy endpoint, for coherence",
+    )
+    strategic_guidance: str | None = Field(
+        None, description="Optional channel-specific direction"
+    )
+    broadcast_day_start: str = Field(
+        "06:00", description="Wall-clock start of the programmable day ('HH:MM')"
+    )
+    cost_tier: Literal["economy", "balanced", "premium"] = Field("balanced")
+
+
+class DaypartSkeletonResponse(BaseModel):
+    """Response carrying just the Pass-A dayparting — no strips yet."""
+
+    skeleton: DaypartSkeleton = Field(...)
+    cost_estimate: CostEstimate = Field(...)
+
+
+class StripFillRequest(BaseModel):
+    """Pass B for ONE daypart block, against a precomputed candidate menu.
+
+    `candidates` is built by Tunarr Scheduler's scheduling/candidates.clj from
+    the catalog's per-tag runtime histogram and this exact block's bounds —
+    never invented here. `prior_strips` carries every strip chosen for
+    earlier blocks in the same grid, for cross-daypart coherence (same role
+    `propose_quarterly_grid`'s internal loop already plays).
+    """
+
+    channel: ChannelContext = Field(...)
+    catalog_profile: CatalogProfile = Field(...)
+    block: DaypartBlock = Field(..., description="The daypart to fill, with its real bounds")
+    candidates: list[DaypartCandidate] = Field(
+        default_factory=list,
+        description="Duration-feasible slot-tiling options for this block; empty is valid "
+        "(falls back to unconstrained strip-fill, same as propose_quarterly_grid today)",
+    )
+    prior_strips: list[GridStrip] = Field(
+        default_factory=list, description="Strips already chosen for earlier daypart blocks"
+    )
+    cost_tier: Literal["economy", "balanced", "premium"] = Field("balanced")
+
+
+class StripFillResponse(BaseModel):
+    """Response carrying the strips filled for one daypart block."""
+
+    strips: list[GridStrip] = Field(default_factory=list)
+    cost_estimate: CostEstimate = Field(...)
 
 
 class QuarterlyGridRepairRequest(BaseModel):

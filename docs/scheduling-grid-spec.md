@@ -147,5 +147,17 @@ cross-midnight, default fill).
   semantics are future work.
 - Richer override scopes ("2nd Tuesday", "last Friday") beyond specific-date and
   weekday-pattern.
-- The `query_media_count` pull tool (Phase 7) for feasibility questions the
-  `CatalogProfile` did not pre-answer.
+- ~~The `query_media_count` pull tool (Phase 7) for feasibility questions the
+  `CatalogProfile` did not pre-answer.~~ **Done, differently.** Rather than an
+  ad hoc pull tool (which would require Tunabrain to hold state across calls,
+  against this design's own stateless invariant), Tunarr Scheduler now
+  precomputes a per-daypart duration-feasible slot menu
+  (`DaypartCandidate`/`CandidateSlot`, this file) and hands it to
+  `propose_strip_fill` — see `quarterly_grid.py`'s `propose_daypart_skeleton`/
+  `propose_strip_fill` (the two-round-trip split of the original
+  `propose_quarterly_grid`) and tunarr-scheduler's
+  `DURATION_AWARE_SCHEDULING.md` (Phase 3) for the full design and as-built
+  record. Also added: `CatalogProfile.tag_runtime_histograms`
+  (`TagRuntimeHistogram`, dimensioning the runtime histogram per tag) and a
+  matching feasibility duration-fit finding in tunarr-scheduler's
+  `feasibility.clj` — both extensions to the contracts in this file.
