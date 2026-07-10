@@ -1,15 +1,24 @@
 # Tuna Brain
 
 Tuna Brain is a FastAPI service that wraps upstream LLMs with LangChain to support
-Tunarr Scheduler. It will help tag media, map media to channels, craft schedules, and
-produce bumpers for upcoming programming blocks.
+Tunarr Scheduler. It tags media, maps media to channels, authors layered TV
+programming grids, and produces bumpers for upcoming programming blocks.
 
 ## Project layout
 
 - `src/tunabrain/app.py`: FastAPI application factory and router wiring.
 - `src/tunabrain/api/models.py`: Pydantic models for request/response payloads.
-- `src/tunabrain/api/routes.py`: HTTP endpoints for tagging, channel mapping, scheduling, and bumpers.
-- `src/tunabrain/chains/`: LangChain-powered workflow stubs, ready to be implemented.
+- `src/tunabrain/api/routes.py`: HTTP endpoints for tagging, channel mapping,
+  layered-grid scheduling (`/api/scheduling/*`), and bumpers.
+- `src/tunabrain/scheduling/`: the layered-grid scheduling pipeline —
+  `quarterly_grid.py` (two-pass dayparting + strip-fill, plus repair),
+  `monthly_overrides.py` (sparse overrides against a frozen grid), `grid.py`
+  (the shared Pydantic contracts), `expander.py` (the golden Grid+Overrides
+  → DailySlot conformance suite tunarr-scheduler ports). See
+  `docs/scheduling-grid-spec.md` and `AGENTS.md` for the authoritative design
+  and the live endpoint list.
+- `src/tunabrain/chains/`: LangChain-powered workflow stubs (tagging, channel
+  mapping, enrichment, bumpers), ready to be implemented.
 - `src/tunabrain/tools/`: LangChain-compatible tools (e.g., Wikipedia lookup) available to
   chains.
 - `flake.nix`: Nix flake for a reproducible development shell with Python dependencies.
@@ -112,7 +121,6 @@ extract audio and keyframes.
 - `POST /tags`: Generate scheduling-oriented tags for a media item.
 - `POST /categorize`: Categorize a media item across caller-supplied dimensions.
 - `POST /channel-mapping`: Associate a media item with matching channels (deprecated; use the `channel` dimension in `/categorize`).
-- `POST /schedule`: Build a schedule for a channel using provided media and instructions.
 - `POST /bumpers`: Produce bumpers tailored to a schedule.
 - `POST /enrich/short-form`: One-call enrichment for short-form media (bumpers,
   fillers, ads, music videos). Orchestrates `/categorize` + `/tags`; no STT.
@@ -120,4 +128,23 @@ extract audio and keyframes.
   (documentaries, video essays, interviews). Fetches the media, extracts audio,
   transcribes it (STT), optionally captions keyframes, then runs
   `/categorize` + `/tags` grounded on the transcript.
+
+### Layered-grid scheduling endpoints
+
+These are the live scheduling API — see `AGENTS.md` for the full request/response
+shapes and `docs/scheduling-grid-spec.md` for the authoritative design:
+
+- `POST /api/scheduling/propose-quarterly-grid`: propose a channel's frozen
+  quarterly Grid (two-pass dayparting + strip-fill).
+- `POST /api/scheduling/propose-daypart-skeleton` / `propose-strip-fill`: the
+  same two passes as a split round trip, so the caller can compute a
+  duration-feasible candidate menu between them.
+- `POST /api/scheduling/repair-quarterly-grid`: targeted repair against a
+  deterministic feasibility report.
+- `POST /api/scheduling/propose-monthly-overrides`: sparse monthly overrides
+  against a frozen grid.
+
+(`POST /schedule`, an earlier LangGraph-agent-based scheduler, was removed —
+it implemented only 2 of a planned 7 tools and was superseded by the
+endpoints above before it ever had a production caller.)
 
