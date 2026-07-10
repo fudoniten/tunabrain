@@ -165,6 +165,21 @@ def test_strip_fill_prompt_includes_block_bounds_and_prior_strips():
     assert "series:cheers" in user  # prior strip shown for consistency
 
 
+def test_strip_fill_prompt_instructs_series_first_authoring():
+    """The system prompt must steer the model toward naming specific series
+    for anchor/marquee dayparts, not defaulting to random:<genre> pools —
+    the fix for schedules that were all generic genre rotation and almost
+    no recurring named shows."""
+    from tunabrain.scheduling.grid import DaypartBlock
+
+    block = DaypartBlock(name="prime", start="17:00", end="22:00", role="marquee sitcoms")
+    messages = qg.build_strip_fill_prompt(_request(), block, [])
+    system = messages[0]["content"]
+    assert "SERIES-FIRST" in system
+    assert "series:<media_id>" in system
+    assert "random:<genre>" in system
+
+
 def test_parse_strips_generates_stable_ids():
     payload = {
         "strips": [

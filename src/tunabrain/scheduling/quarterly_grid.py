@@ -261,7 +261,8 @@ RULES:
 - Every strip must lie WITHIN this daypart's time bounds.
 - Strips within the daypart must not overlap each other.
 - Prefer 'sequential' for a single series stripped across days; 'random' for a rotating pool.
-- Choose shows that plausibly have enough episodes for the strip's weekly frequency (do not do precise math; a downstream checker validates capacity).{menu_rule}
+- Choose shows that plausibly have enough episodes for the strip's weekly frequency (do not do precise math; a downstream checker validates capacity).
+- SERIES-FIRST: this is a real programming grid, not a genre wheel. For an anchor/marquee/prime-style daypart (its role names a flagship slot, e.g. "prime", "marquee sitcoms", "appointment viewing"), strip in SPECIFIC named shows from the AVAILABLE MEDIA list below (`series:<media_id>`, 'sequential') — the higher its available-episode count, the better an anchor it makes. Reserve `random:<genre>` pools for daytime filler, overnight rotation, or genuinely miscellaneous blocks where no single show should dominate. A daypart described as a flagship block that resolves entirely to `random:<genre>` strips is a bad answer even if it technically fits the role.{menu_rule}
 - Return ONLY JSON, no markdown."""
 
     user_prompt = f"""Channel: "{request.channel.name}" - {request.channel.description}
