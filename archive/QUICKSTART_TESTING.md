@@ -1,3 +1,9 @@
+> **ARCHIVED (2026-07):** tests the LangGraph agent (`POST /schedule`), which
+> has been deleted (superseded by the layered-grid pipeline before it ever
+> had a production caller). For testing the live scheduling endpoints, see
+> `AGENTS.md` and `tests/test_quarterly_grid_unit.py` /
+> `tests/test_monthly_overrides_unit.py`.
+
 # Quick Start: Testing the Scheduling Agent
 
 ## 🚀 Fastest Way to Test (3 minutes)

@@ -1,8 +1,16 @@
+> **ARCHIVED (2026-07):** this plan describes the LangGraph ReAct scheduling
+> agent (`agents/`, `chains/scheduling.py`, `POST /schedule`), which
+> implemented only 2 of the 7 tools planned below and was superseded by the
+> layered-grid pipeline (`scheduling/quarterly_grid.py` +
+> `monthly_overrides.py`, `/api/scheduling/*`) before Phase 3 ever started.
+> The code this plan describes has been deleted. Kept for historical
+> design-rationale only — do not treat "Status" below as current.
+
 # Autonomous Scheduling Agent Implementation Plan
 
 **Version**: 1.1  
 **Date**: January 23, 2026  
-**Status**: In Progress - Phase 2 Complete ✅
+**Status**: In Progress - Phase 2 Complete ✅ (historical — see archival note above)
 
 ---
 

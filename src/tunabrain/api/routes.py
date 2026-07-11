@@ -34,8 +34,6 @@ from tunabrain.api.models import (
     QuarterlyGridResponse,
     QuarterlyStrategyRequest,
     QuarterlyStrategyResponse,
-    ScheduleRequest,
-    ScheduleResponse,
     StripFillRequest,
     StripFillResponse,
     TagAuditRequest,
@@ -53,7 +51,6 @@ from tunabrain.chains.directory_enrichment import enrich_profile
 from tunabrain.chains.enrich_long import run_enrich_long_form
 from tunabrain.chains.enrich_short import run_enrich_short_form
 from tunabrain.chains.episode_flagging import generate_episode_flags
-from tunabrain.chains.scheduling import build_schedule
 from tunabrain.chains.tag_governance import audit_tags, triage_tags
 from tunabrain.chains.tagging import generate_tags
 from tunabrain.config import is_debug_enabled
@@ -241,34 +238,6 @@ async def enrich_profile_endpoint(request: EnrichProfileRequest) -> EnrichProfil
     )
     return response
 
-
-@router.post("/schedule", response_model=ScheduleResponse)
-async def schedule(request: ScheduleRequest) -> ScheduleResponse:
-    """Create a schedule using the autonomous agent.
-
-    This endpoint uses the new LangGraph-based scheduling agent
-    (build_schedule_with_agent) internally. The parameter style is
-    transitional; the agent itself is current.
-
-    NOTE: The layered grid endpoints (/api/scheduling/*) are planned
-    but not yet implemented in this branch. This endpoint remains
-    the active scheduling API until those land.
-    """
-    logger.info(
-        "Processing schedule request for channel='%s' with %s media items, "
-        "start_date='%s', cost_tier='%s'",
-        request.channel.name,
-        len(request.media),
-        request.start_date.strftime("%Y-%m-%d"),
-        request.cost_tier,
-    )
-    return await build_schedule(
-        channel=request.channel,
-        media=request.media,
-        user_instructions=request.user_instructions,
-        scheduling_window_days=request.scheduling_window_days,
-        debug=is_debug_enabled(request.debug),
-    )
 
 
 @router.post("/bumpers", response_model=BumperResponse)

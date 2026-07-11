@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-07):** describes the LangGraph agent superseded by the
+> layered-grid pipeline; the code below has been deleted. Kept for history.
+
 # Autonomous Scheduling Agent (Phases 1 & 2)
 
 ## Summary
