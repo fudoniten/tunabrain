@@ -522,3 +522,78 @@ async def test_repair_preserves_unflagged_strips(_mock_llm, monkeypatch):
     assert llm_calls == 1
     assert revised.strips[0].strip_id == "keep-1"
     assert changes == ["No change needed"]
+
+
+def test_repair_prompt_makes_nonexistent_and_repetition_findings_actionable():
+    """The deterministic checker now emits two shortfall kinds the old repair
+    guidance ('reduce frequency / swap to a show with more episodes / pool into
+    random') couldn't resolve: a `random:<genre>` naming a category that isn't in
+    the catalog (hallucinated — reducing its frequency fixes nothing), and a
+    short slot whose right-length pool is too thin for how often it airs. The
+    repair prompt must tell the model the actual fix for each, and must still
+    render the checker's verbatim finding messages so it knows which strip."""
+    current = Grid(
+        channel="Classic Comedy",
+        strips=[
+            GridStrip(
+                strip_id="ghost",
+                days="weekdays",
+                start="20:00",
+                end="21:00",
+                content=Content(media_id="random:sci-fi-and-fantasy", strategy="random"),
+            ),
+            GridStrip(
+                strip_id="shorts",
+                days="weekdays",
+                start="12:00",
+                end="12:30",
+                content=Content(media_id="random:comedy", strategy="random"),
+            ),
+        ],
+    )
+    report = FeasibilityReport(
+        horizon_start="2026-01-01",
+        horizon_end="2026-04-01",
+        overall_status="blocked",
+        strip_findings=[
+            StripFeasibility(
+                rule_id="ghost",
+                media_id="random:sci-fi-and-fantasy",
+                slots_required=65,
+                episodes_available=0,
+                status="shortfall",
+                message="category 'sci-fi-and-fantasy' does not exist in the catalog profile",
+            ),
+            StripFeasibility(
+                rule_id="shorts",
+                media_id="random:comedy",
+                slots_required=65,
+                episodes_available=450,
+                status="shortfall",
+                message="only 5 'comedy' item(s) within 15min of the strip's 30min length "
+                "for 15 airing(s)/week — each would repeat ~3.0×/week",
+            ),
+        ],
+    )
+    req = QuarterlyGridRepairRequest(
+        channel=ChannelContext(name="Classic Comedy", description="x"),
+        catalog_profile=_profile(),
+        current_grid=current,
+        feasibility_report=report,
+    )
+    messages = qg.build_grid_repair_prompt(req)
+    system = messages[0]["content"]
+    user = messages[1]["content"]
+
+    # Hallucinated-category guidance: swap to a real genre / series, don't just
+    # cut frequency.
+    assert "does not exist" in system
+    assert "AVAILABLE MEDIA" in system
+    # Length/repetition guidance: reduce frequency / lengthen / drop duplicates,
+    # not swap to another thin short category.
+    assert "repeats N" in system or "repetition" in system.lower()
+
+    # The checker's verbatim messages reach the model so it knows which strip
+    # and why (the existing plumbing this guidance relies on).
+    assert "does not exist in the catalog profile" in user
+    assert "repeat ~3.0" in user

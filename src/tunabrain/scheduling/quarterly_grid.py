@@ -328,7 +328,9 @@ Respond in valid JSON ONLY, returning the COMPLETE corrected strip list:
 
 RULES:
 - Change ONLY the strips named in the findings (capacity shortfalls, overlaps, gaps). Leave every other strip byte-identical.
-- To fix a shortfall: reduce the strip's weekly frequency, swap to a show with more episodes, or pool into a 'random' rotation.
+- To fix a CAPACITY shortfall (too few episodes for the airings): reduce the strip's weekly frequency, swap to a show with more episodes, or pool into a 'random' rotation.
+- A `random:<genre>` category MUST be one of the genres/categories shown in AVAILABLE MEDIA below. If a finding says a category "does not exist" in the catalog, that category was hallucinated — it has no media behind it, so reducing its frequency fixes nothing. Swap it for a genre that actually appears in AVAILABLE MEDIA, or for a specific `series:<id>`.
+- If a finding is about slot LENGTH or repetition (too few items of the right length; "repeats N×/week"): the slot is too short for how much matching-length content the catalog has, and airs too often, so the same few items grind round. Fix it by reducing the strip's frequency (fewer days), lengthening the slot to a duration with deeper inventory, or dropping duplicate short slots — NOT by swapping to another equally thin short category.
 - Return ONLY JSON."""
 
     user_prompt = f"""Channel: "{request.channel.name}"
