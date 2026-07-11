@@ -384,8 +384,19 @@ def _strip_code_fences(content: str) -> str:
     return "\n".join(lines)
 
 
-def _invoke_json(messages: list[dict], *, max_tokens: int, temperature: float) -> dict:
-    """Invoke the scheduling LLM and parse a JSON object response.
+def _invoke_json(
+    messages: list[dict],
+    *,
+    max_tokens: int,
+    temperature: float,
+    task: LLMTask = LLMTask.SCHEDULING,
+) -> dict:
+    """Invoke a scheduling LLM and parse a JSON object response.
+
+    ``task`` selects which model routes the call (defaults to the schedule-
+    authoring model; the review loop passes ``LLMTask.SCHEDULE_REVIEW`` to use
+    its own, possibly sharper, reviewer model). The reasoning-model and
+    malformed-JSON handling below is task-agnostic, so it is shared verbatim.
 
     Reasoning-capable models (e.g. ``deepseek-v4-flash``) spend part of the
     completion budget on hidden reasoning tokens *before* emitting any JSON. If
@@ -399,7 +410,7 @@ def _invoke_json(messages: list[dict], *, max_tokens: int, temperature: float) -
     parseable output. A budget truncation is *not* retried, since a re-roll hits
     the same ceiling.
     """
-    llm = get_chat_model(LLMTask.SCHEDULING)
+    llm = get_chat_model(task)
     last_error: json.JSONDecodeError | None = None
     for attempt in range(1, _MAX_JSON_ATTEMPTS + 1):
         try:
