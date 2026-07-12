@@ -22,6 +22,7 @@ class LLMTask(Enum):
     SHOW_TAGGING = "show_tagging"
     EPISODE_FLAGGING = "episode_flagging"
     SCHEDULING = "scheduling"
+    SCHEDULE_REVIEW = "schedule_review"
     CATEGORIZATION = "categorization"
     BUMPERS = "bumpers"
 
@@ -33,7 +34,8 @@ def get_chat_model(task: LLMTask = LLMTask.DEFAULT):
     - TUNABRAIN_SHOW_LLM_MODEL: for show tagging
     - TUNABRAIN_EPISODE_LLM_MODEL: for episode special flags
     - TUNABRAIN_SCHEDULE_LLM_MODEL: for scheduling
-    
+    - TUNABRAIN_REVIEW_LLM_MODEL: for the schedule review / critique loop
+
     Falls back to TUNABRAIN_LLM_MODEL if task-specific override not set.
     """
 
@@ -49,6 +51,8 @@ def get_chat_model(task: LLMTask = LLMTask.DEFAULT):
         model_to_use = settings.episode_llm_model
     elif task == LLMTask.SCHEDULING and settings.schedule_llm_model:
         model_to_use = settings.schedule_llm_model
+    elif task == LLMTask.SCHEDULE_REVIEW and settings.review_llm_model:
+        model_to_use = settings.review_llm_model
     elif task == LLMTask.BUMPERS and settings.bumpers_llm_model:
         model_to_use = settings.bumpers_llm_model
 

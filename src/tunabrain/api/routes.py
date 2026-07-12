@@ -34,6 +34,10 @@ from tunabrain.api.models import (
     QuarterlyGridResponse,
     QuarterlyStrategyRequest,
     QuarterlyStrategyResponse,
+    ReviewReviseRequest,
+    ReviewReviseResponse,
+    ScheduleReviewRequest,
+    ScheduleReviewResponse,
     StripFillRequest,
     StripFillResponse,
     TagAuditRequest,
@@ -64,6 +68,7 @@ from tunabrain.scheduling.quarterly_grid import (
     repair_quarterly_grid,
 )
 from tunabrain.scheduling.quarterly_strategy import generate_quarterly_strategy
+from tunabrain.scheduling.review import review_grid, revise_grid_from_review
 from tunabrain.version import get_git_info
 
 router = APIRouter()
@@ -703,4 +708,98 @@ async def propose_overrides(request: MonthlyOverridesRequest) -> MonthlyOverride
             "Expand each week with the deterministic expander (grid + these overrides)",
             "No Tunabrain call is needed for weekly expansion",
         ],
+    )
+
+
+@router.post("/api/scheduling/review-grid", response_model=ScheduleReviewResponse)
+async def review_schedule(request: ScheduleReviewRequest) -> ScheduleReviewResponse:
+    """Critique a concrete realized week against its daypart plan (Phase 7).
+
+    The taste half of scheduling: given a sample week expanded from the frozen
+    grid (real show titles in real slots), judge variety, daypart-fit,
+    series-usage, pacing, and coherence — the things the deterministic
+    feasibility checker structurally cannot. Returns a verdict + actionable
+    findings that Tunarr Scheduler feeds into `/api/scheduling/revise-grid` when
+    the verdict is 'fail'.
+
+    HTTP Responses:
+        200: Review produced successfully
+        400: Invalid request
+        500: LLM invocation failed or response invalid
+    """
+    logger.info(
+        "Reviewing schedule for channel='%s' (%s sample slots)",
+        request.channel.name,
+        len(request.sample_week),
+    )
+
+    review, llm_calls = await review_grid(request)
+
+    cost_usd = calculate_cost(
+        model="gpt-4o-mini",
+        prompt_tokens=2500 * llm_calls,
+        completion_tokens=1200 * llm_calls,
+    )
+    review_id = (
+        f"review-{request.channel.name}-{uuid.uuid4().hex[:8]}"
+    ).lower().replace(" ", "-")
+
+    return ScheduleReviewResponse(
+        review_id=review_id,
+        status="success",
+        review=review,
+        cost_estimate={
+            "estimated_cost_usd": cost_usd,
+            "llm_calls_used": llm_calls,
+            "estimated_tokens": f"~{3700 * llm_calls}",
+            "provider": "openrouter",
+            "model": "gpt-4o-mini",
+        },
+    )
+
+
+@router.post("/api/scheduling/revise-grid", response_model=ReviewReviseResponse)
+async def revise_schedule(request: ReviewReviseRequest) -> ReviewReviseResponse:
+    """Revise a grid to address a failed schedule review (Phase 7).
+
+    The revise half of the review loop: given the grid and the reviewer's taste
+    findings, return a minimally-changed grid that addresses them (swap a
+    generic pool for a named series in an anchor daypart, break up a repetitive
+    block, etc.). Same shape as a feasibility repair, but driven by taste rather
+    than capacity. Tunarr Scheduler re-runs feasibility + review on the result.
+
+    HTTP Responses:
+        200: Grid revised successfully
+        400: Invalid request
+        500: LLM invocation failed or response invalid
+    """
+    logger.info(
+        "Revising grid for channel='%s' (%s review findings)",
+        request.channel.name,
+        len(request.review.findings),
+    )
+
+    revised, changes, llm_calls = await revise_grid_from_review(request)
+
+    cost_usd = calculate_cost(
+        model="gpt-4o-mini",
+        prompt_tokens=2000 * llm_calls,
+        completion_tokens=1500 * llm_calls,
+    )
+    grid_id = (
+        f"grid-review-revise-{request.channel.name}-{uuid.uuid4().hex[:8]}"
+    ).lower().replace(" ", "-")
+
+    return ReviewReviseResponse(
+        grid_id=grid_id,
+        status="success",
+        grid=revised,
+        changes=changes,
+        cost_estimate={
+            "estimated_cost_usd": cost_usd,
+            "llm_calls_used": llm_calls,
+            "estimated_tokens": f"~{3500 * llm_calls}",
+            "provider": "openrouter",
+            "model": "gpt-4o-mini",
+        },
     )

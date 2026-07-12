@@ -14,6 +14,7 @@ from tunabrain.scheduling.grid import (
     Grid,
     GridStrip,
     Override,
+    SelectionStrategy,
 )
 
 
@@ -851,6 +852,133 @@ class QuarterlyGridRepairRequest(BaseModel):
 
 class QuarterlyGridRepairResponse(BaseModel):
     """Response carrying the revised grid."""
+
+    grid_id: str = Field(...)
+    status: Literal["success", "partial", "error"] = Field(...)
+    grid: Grid = Field(..., description="The revised grid")
+    changes: list[str] = Field(
+        default_factory=list, description="Human-readable summary of what was changed"
+    )
+    cost_estimate: CostEstimate = Field(...)
+
+
+# ============================================================================
+# Schedule Review / critique loop (Phase 7)
+#
+# The feasibility checker is deterministic and only sees structure (capacity,
+# overlaps, coverage). It can't judge *taste* — whether a concrete week is
+# repetitive, ignores its own daypart intent, leans on generic random pools
+# when named series are available, or just reads as bad TV. That judgement is
+# exactly what a cheap LLM does well when it's handed a CONCRETE realized week
+# (real show titles in real slots) rather than an abstract catalog summary.
+#
+# review-grid critiques; revise-grid-from-review applies the critique. Tunarr
+# Scheduler drives the loop (expand a sample week -> review -> revise on fail,
+# bounded) exactly as it already drives the propose -> feasibility -> repair
+# loop, but for taste instead of capacity.
+# ============================================================================
+
+
+class ReviewSlot(BaseModel):
+    """One concrete slot in the sample week handed to the reviewer.
+
+    This is a realized view — a specific weekday and time with the actual show
+    (or pool) that lands there — as opposed to the abstract ``GridStrip`` rule
+    it came from. Tunarr Scheduler produces it by expanding one representative
+    week of the frozen grid and labelling each slot with its show title, so the
+    reviewer sees "Mon 17:00-17:30 Seinfeld" rather than "series:42".
+    """
+
+    day: Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"] = Field(
+        ..., description="Weekday this slot airs on"
+    )
+    start: str = Field(..., description="Start time 'HH:MM' (24h)")
+    end: str = Field(..., description="End time 'HH:MM'; end <= start wraps past midnight")
+    label: str = Field(
+        ..., description="Human-readable content, e.g. 'Seinfeld' or 'random: comedy pool'"
+    )
+    media_id: str = Field(..., description="The underlying media_id (series:/movie:/random:)")
+    strategy: SelectionStrategy = Field(
+        "sequential", description="How content rotates within the slot"
+    )
+    daypart: str | None = Field(
+        None, description="Daypart this slot falls in, if known (links back to the skeleton)"
+    )
+
+
+class ReviewFinding(BaseModel):
+    """One taste problem the reviewer found in the sample week."""
+
+    aspect: Literal[
+        "variety", "daypart-fit", "genericness", "series-usage", "pacing", "coherence", "other"
+    ] = Field(..., description="Which quality dimension this finding is about")
+    severity: Literal["minor", "major"] = Field(
+        ..., description="'major' findings are what fail the review; 'minor' are nice-to-fix"
+    )
+    message: str = Field(..., description="What's wrong, concretely and actionably")
+    target: str | None = Field(
+        None, description="Daypart name or strip_id this finding is about, if specific"
+    )
+
+
+class ScheduleReviewRequest(BaseModel):
+    """Ask the reviewer to critique a concrete realized week against its plan."""
+
+    channel: ChannelContext = Field(...)
+    skeleton: DaypartSkeleton | None = Field(
+        None, description="The dayparting plan (roles/intent) the grid was filled from"
+    )
+    grid: Grid = Field(..., description="The frozen grid whose realization is under review")
+    sample_week: list[ReviewSlot] = Field(
+        default_factory=list,
+        description="A representative week expanded from the grid, labelled with real titles",
+    )
+    catalog_profile: CatalogProfile | None = Field(
+        None,
+        description="Optional catalog shape, so the reviewer can flag under-used named series",
+    )
+    cost_tier: Literal["economy", "balanced", "premium"] = Field("balanced")
+
+
+class ScheduleReview(BaseModel):
+    """The reviewer's verdict on one realized week."""
+
+    verdict: Literal["pass", "fail"] = Field(
+        ..., description="'fail' when any 'major' finding is present"
+    )
+    score: float = Field(
+        ..., ge=0.0, le=1.0, description="Overall taste quality, 0 (bad TV) to 1 (great)"
+    )
+    summary: str = Field(..., description="One-paragraph overall assessment")
+    findings: list[ReviewFinding] = Field(default_factory=list)
+
+
+class ScheduleReviewResponse(BaseModel):
+    """Response carrying the review verdict."""
+
+    review_id: str = Field(..., description="Unique id for auditing")
+    status: Literal["success", "error"] = Field(...)
+    review: ScheduleReview = Field(...)
+    cost_estimate: CostEstimate = Field(...)
+
+
+class ReviewReviseRequest(BaseModel):
+    """Apply a failed review's findings to the grid (the revise half of the loop).
+
+    Mirrors QuarterlyGridRepairRequest, but the feedback is *taste* findings
+    from a ScheduleReview rather than deterministic feasibility findings. Only
+    the strips implicated by the findings should change; the rest stays put.
+    """
+
+    channel: ChannelContext = Field(...)
+    catalog_profile: CatalogProfile = Field(...)
+    current_grid: Grid = Field(..., description="The grid whose realized week the review failed")
+    review: ScheduleReview = Field(..., description="The critique to act on")
+    cost_tier: Literal["economy", "balanced", "premium"] = Field("balanced")
+
+
+class ReviewReviseResponse(BaseModel):
+    """Response carrying the taste-revised grid (same shape as a repair)."""
 
     grid_id: str = Field(...)
     status: Literal["success", "partial", "error"] = Field(...)
