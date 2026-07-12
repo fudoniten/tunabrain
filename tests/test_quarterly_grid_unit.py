@@ -22,6 +22,7 @@ from tunabrain.scheduling.grid import (
     RuntimeBucket,
     ShowProfile,
     StripFeasibility,
+    TagAggregate,
 )
 
 
@@ -74,6 +75,46 @@ def test_summarize_profile_includes_shows_and_genres():
     assert "Seinfeld" in text
     assert "comedy" in text
     assert "22min" in text  # avg runtime rounded
+
+
+def test_summarize_profile_advertises_random_pools_from_tag_aggregates():
+    # The dimension-model vocabulary: genre: pools are valid random:<category>
+    # values (rendered bare), channel:/other dimensions and empty pools are not.
+    profile = _profile()
+    profile.tag_aggregates = [
+        TagAggregate(tag="genre:comedy", show_count=2, episode_count=450),
+        TagAggregate(tag="genre:sitcom", show_count=2, episode_count=450),
+        TagAggregate(tag="genre:documentary", show_count=0, episode_count=0),
+        TagAggregate(tag="channel:classic-comedy", show_count=2, episode_count=450),
+    ]
+    text = qg.summarize_catalog_profile(profile)
+    assert "Random pools" in text
+    assert "comedy (2 shows / 450 eps)" in text
+    assert "sitcom" in text
+    # empty pool dropped, non-genre dimension not offered as a category, prefix stripped
+    assert "documentary" not in text
+    assert "channel:classic-comedy" not in text
+    assert "genre:comedy" not in text
+    # the deprecated Genres: line is suppressed when real pools exist
+    assert "Genres:" not in text
+
+
+def test_summarize_profile_falls_back_to_genres_without_tag_aggregates():
+    # Older profiles with no dimension tags still get a usable genre list.
+    text = qg.summarize_catalog_profile(_profile())  # _profile() has no tag_aggregates
+    assert "Genres: comedy" in text
+    assert "Random pools" not in text
+
+
+def test_strip_fill_prompt_forbids_invented_and_compound_random_categories():
+    messages = qg.build_strip_fill_prompt(
+        _request(),
+        qg.DaypartBlock(name="daytime", start="10:00", end="17:00", role="filler"),
+        [],
+    )
+    system = messages[0]["content"]
+    assert "VERBATIM" in system
+    assert "animation,family" in system  # the compound anti-example is called out
 
 
 def test_summarize_profile_omits_unschedulable_shows():

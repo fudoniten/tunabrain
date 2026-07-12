@@ -50,6 +50,38 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+def _random_pool_categories(profile: CatalogProfile) -> list[tuple[str, int, int]]:
+    """The bare category names a ``random:<category>`` strip may legally use,
+    derived from the dimension-model ``tag_aggregates``.
+
+    This is the *same* vocabulary Tunarr Scheduler's feasibility checker
+    validates a ``random:<category>`` against (``feasibility/tag-matches?``
+    accepts a category bare or ``genre:``-prefixed) and — because
+    ``tag_aggregates`` is already sliced to this channel's own pool — every
+    category here actually resolves to media at playout. Previously the prompt
+    advertised ``profile.genres`` (a deprecated, differently-cased view) and
+    each show's comma-joined ``genres`` list instead, so the model would emit
+    categories the checker had never heard of (``sci-fi-and-fantasy``) or the
+    comma-joined show label as one tag (``animation,family``) — dead pools that
+    resolve to empty collections. Only genre-dimension (and bare, dimensionless)
+    tags are eligible pools; ``channel:``/other-dimension tags are not
+    categories. Sorted by episode volume, empty pools dropped.
+    """
+    out: list[tuple[str, int, int]] = []
+    for ta in profile.tag_aggregates:
+        tag = ta.tag or ""
+        if tag.startswith("genre:"):
+            category = tag[len("genre:") :]
+        elif ":" in tag:
+            continue  # a non-genre dimension (channel:, decade:, …) — not a pool
+        else:
+            category = tag
+        if category and ta.episode_count > 0:
+            out.append((category, ta.show_count, ta.episode_count))
+    out.sort(key=lambda t: t[2], reverse=True)
+    return out
+
+
 def summarize_catalog_profile(
     profile: CatalogProfile,
     max_shows: int = 40,
@@ -73,7 +105,20 @@ def summarize_catalog_profile(
     """
     lines: list[str] = []
 
-    if profile.genres:
+    # The authoritative random:<category> vocabulary, taken from the
+    # channel-scoped tag_aggregates so it matches what the downstream checker
+    # accepts and what actually has media. Falls back to the deprecated
+    # profile.genres view only when no dimension tags are present (older
+    # profiles), never showing both — two conflicting lists is exactly what let
+    # the model reach for a name that doesn't resolve.
+    pools = _random_pool_categories(profile)
+    if pools:
+        pool_bits = [f"{c} ({sc} shows / {ec} eps)" for c, sc, ec in pools]
+        lines.append(
+            "Random pools — the ONLY valid random:<category> values, copy a name VERBATIM: "
+            + ", ".join(pool_bits)
+        )
+    elif profile.genres:
         genre_bits = [
             f"{g.genre} ({g.show_count} shows / {g.episode_count} eps)"
             for g in sorted(profile.genres, key=lambda g: g.episode_count, reverse=True)
@@ -249,7 +294,7 @@ Respond in valid JSON ONLY:
       "days": "daily" | "weekdays" | "weekends" | ["mon","wed","fri", ...],
       "start": "HH:MM",
       "end": "HH:MM (end <= start wraps past midnight)",
-      "media_id": "series:<id> | movie:<id> | random:<genre> (genre MUST be one of the genres listed in the catalog profile above; never 'series', 'movie', 'show', or 'episode')",
+      "media_id": "series:<id> | movie:<id> | random:<category> (category MUST be copied VERBATIM from the 'Random pools' list in the catalog profile above — exactly one pool name. NEVER invent a category, NEVER join two with a comma (no 'animation,family'), NEVER slugify or reuse a show's comma-joined genre label, and NEVER use 'series', 'movie', 'show', or 'episode')",
       "strategy": "sequential | random | specific",
       "category_filters": ["string", ...],
       "label": "string (short, for the GUI)"
@@ -261,6 +306,7 @@ RULES:
 - Every strip must lie WITHIN this daypart's time bounds.
 - Strips within the daypart must not overlap each other.
 - Prefer 'sequential' for a single series stripped across days; 'random' for a rotating pool.
+- A random:<category> is only valid if <category> is one of the 'Random pools' names above verbatim. There is no pool for a genre that isn't listed, and no compound/comma pool — if the block wants a mix, use a listed pool or strip in named series instead.
 - Choose shows that plausibly have enough episodes for the strip's weekly frequency (do not do precise math; a downstream checker validates capacity).
 - SERIES-FIRST: this is a real programming grid, not a genre wheel. For an anchor/marquee/prime-style daypart (its role names a flagship slot, e.g. "prime", "marquee sitcoms", "appointment viewing"), strip in SPECIFIC named shows from the AVAILABLE MEDIA list below (`series:<media_id>`, 'sequential') — the higher its available-episode count, the better an anchor it makes. Reserve `random:<genre>` pools for daytime filler, overnight rotation, or genuinely miscellaneous blocks where no single show should dominate. A daypart described as a flagship block that resolves entirely to `random:<genre>` strips is a bad answer even if it technically fits the role.{menu_rule}
 - Return ONLY JSON, no markdown."""
