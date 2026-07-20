@@ -32,6 +32,7 @@ from tunabrain.api.models import (
     CostEstimate,
     EnrichProfileRequest,
     EnrichProfileResponse,
+    GroupContext,
 )
 from tunabrain.chains.validation import partition_values
 from tunabrain.config import get_settings, is_debug_enabled
@@ -56,6 +57,9 @@ _SYSTEM_PROMPT = (
     "Rules:\n"
     "- Base your analysis ONLY on the concept name and the filenames. Do NOT "
     "hallucinate facts about the actual video content.\n"
+    "- If operator-provided context is given below, treat it as ground truth "
+    "about the group's actual content — it overrides any assumption you'd "
+    "otherwise make from the concept name or filenames alone.\n"
     "- dimensions: a JSON object mapping dimension names to a list of one or "
     "more values. Allowed dimension keys: channel, audience, freshness, season, "
     "time-slot.\n"
@@ -85,6 +89,9 @@ _SYSTEM_PROMPT_WITH_CATEGORIES = (
     "Rules:\n"
     "- Base your analysis ONLY on the concept name and the filenames. Do NOT "
     "hallucinate facts about the actual video content.\n"
+    "- If operator-provided context is given below, treat it as ground truth "
+    "about the group's actual content — it overrides any assumption you'd "
+    "otherwise make from the concept name or filenames alone.\n"
     "- dimensions: a JSON object mapping each dimension name below to a list "
     "of one or more values, chosen ONLY from that dimension's candidate "
     "values. Never invent a value outside the candidates.\n"
@@ -182,6 +189,26 @@ def _normalize_category_values(
     return result
 
 
+def _format_operator_context(context: GroupContext | None) -> str:
+    """Render the caller-supplied `GroupContext` as a prompt section, or `""`
+    when there's nothing to say.
+
+    Unlike `MediaContext` (per-item chains), links here are echoed as plain
+    text, never fetched or summarized — this chain has no web-grounding step
+    at all, only filenames and whatever the operator wrote by hand.
+    """
+    if context is None:
+        return ""
+    lines: list[str] = []
+    if context.text and context.text.strip():
+        lines.append(context.text.strip())
+    if context.links:
+        lines.append("Reference links (context only, not fetched): " + ", ".join(context.links))
+    if not lines:
+        return ""
+    return "Operator-provided context:\n" + "\n".join(lines) + "\n\n"
+
+
 def _format_categories_block(categories: dict[str, CategoryDefinition]) -> str:
     """Render the caller-supplied dimensions as a candidate-value prompt block.
 
@@ -273,6 +300,12 @@ async def enrich_profile(
     `grout.tunarr_scheduler/fetch-value-descriptions!`). Without it, the
     model proposes values freely across the fixed `_DIMENSION_KEYS`, matching
     pre-v1.1 behavior.
+
+    `request.context` (a `GroupContext`), when supplied, is rendered into the
+    prompt verbatim as operator-authored ground truth (see
+    `_format_operator_context`) — e.g. correcting a directory of retro
+    video-game ads that was misclassified onto a vintage-film channel. Unlike
+    per-item `MediaContext`, links are never fetched/summarized here.
     """
     debug = is_debug_enabled(request.debug)
     logger.info(
@@ -306,6 +339,7 @@ async def enrich_profile(
                 "human",
                 "Group concept name: {concept_name}\n\n"
                 "Sample filenames from this group:\n{filenames_block}\n\n"
+                "{operator_context_section}"
                 "{categories_section}"
                 "Return only the JSON dictated by the format instructions."
                 "{format_instructions}",
@@ -316,6 +350,7 @@ async def enrich_profile(
     inputs = {
         "concept_name": request.concept_name,
         "filenames_block": filenames_block,
+        "operator_context_section": _format_operator_context(request.context),
         "categories_section": categories_section,
         "format_instructions": f"\n\n{parser.get_format_instructions()}",
     }
