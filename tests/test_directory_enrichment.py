@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from tunabrain.api.models import EnrichProfileRequest
+from tunabrain.api.models import CategoryDefinition, CategoryValue, EnrichProfileRequest
 from tunabrain.chains import directory_enrichment as prof_mod
 from tunabrain.chains.directory_enrichment import ProfileResult, enrich_profile
 
@@ -124,3 +124,95 @@ async def test_degrades_to_empty_profile_on_llm_failure(monkeypatch):
     assert resp.tags == []
     assert any("profile failed" in w for w in resp.warnings)
     assert resp.cost_estimate.llm_calls_used == 1
+
+
+# --- request.categories: controlled vocabulary ------------------------------
+#
+# When Grout supplies `categories` (fetched from Tunarr Scheduler's
+# /api/dimensions/descriptions), the model is constrained to the given
+# dimensions and their candidate values: hallucinated values are dropped and
+# every listed dimension is guaranteed at least one value.
+
+_CATEGORIES = {
+    "channel": CategoryDefinition(
+        description="Which channel this content airs on",
+        values=[
+            CategoryValue(value="toontown", description="Animated content"),
+            CategoryValue(value="infobytes", description="Science & technology"),
+        ],
+    ),
+    "audience": CategoryDefinition(
+        description="Who this is appropriate for",
+        values=["kids", "teen", "adult"],
+    ),
+}
+
+
+@pytest.mark.anyio
+async def test_categories_prompt_includes_candidate_values(stub_profile):
+    stub_profile["result"] = ProfileResult(
+        dimensions={"channel": ["toontown"], "audience": ["kids"]},
+        tags=["retro", "commercials", "gaming"],
+    )
+    await enrich_profile(_request(categories=_CATEGORIES))
+
+    messages = stub_profile["messages"]
+    rendered = "\n".join(str(m) for m in messages)
+    assert "toontown: Animated content" in rendered
+    assert "infobytes: Science & technology" in rendered
+    assert "kids" in rendered and "teen" in rendered and "adult" in rendered
+
+
+@pytest.mark.anyio
+async def test_categories_hallucinated_value_is_dropped_and_replaced(stub_profile):
+    # The model invents "educational" for channel, which is not a candidate.
+    stub_profile["result"] = ProfileResult(
+        dimensions={"channel": ["educational"], "audience": ["kids"]},
+        tags=["retro"],
+    )
+    resp = await enrich_profile(_request(categories=_CATEGORIES))
+
+    # Hallucinated value dropped; dimension still gets a fallback value
+    # rather than coming back empty/nil.
+    assert resp.dimensions["channel"] == ["toontown"]
+    assert resp.dimensions["audience"] == ["kids"]
+
+
+@pytest.mark.anyio
+async def test_categories_omitted_dimension_is_filled_with_fallback(stub_profile):
+    # The model omits "audience" entirely.
+    stub_profile["result"] = ProfileResult(
+        dimensions={"channel": ["infobytes"]},
+        tags=["science"],
+    )
+    resp = await enrich_profile(_request(categories=_CATEGORIES))
+
+    assert resp.dimensions["channel"] == ["infobytes"]
+    # Every requested dimension must have at least one value.
+    assert resp.dimensions["audience"] == ["kids"]
+
+
+@pytest.mark.anyio
+async def test_categories_unrequested_dimension_is_dropped(stub_profile):
+    # The model returns a dimension outside the requested categories.
+    stub_profile["result"] = ProfileResult(
+        dimensions={"channel": ["toontown"], "made-up": ["nonsense"]},
+        tags=["retro"],
+    )
+    resp = await enrich_profile(_request(categories=_CATEGORIES))
+
+    assert set(resp.dimensions.keys()) == {"channel", "audience"}
+
+
+@pytest.mark.anyio
+async def test_no_categories_preserves_freeform_behavior(stub_profile):
+    # Without categories, the model proposes freely and omitted dimensions
+    # stay omitted (no forced fallback) — pre-v1.1 behavior.
+    stub_profile["result"] = ProfileResult(
+        dimensions={"channel": ["muse"]},
+        tags=["music"],
+    )
+    resp = await enrich_profile(_request())
+
+    assert resp.dimensions == {"channel": ["muse"]}
+    assert "audience" not in resp.dimensions

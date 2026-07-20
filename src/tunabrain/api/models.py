@@ -1392,6 +1392,19 @@ class EnrichProfileRequest(BaseModel):
             "— the prompt grounds on whatever ``sample_filenames`` actually holds."
         ),
     )
+    categories: dict[str, CategoryDefinition] = Field(
+        default_factory=dict,
+        description=(
+            "Dimensions with descriptions and allowed values, same shape as "
+            "CategorizationRequest.categories. When supplied, the model is "
+            "constrained to these dimensions and their candidate values only "
+            "— every listed dimension gets at least one value, and any value "
+            "outside the candidates is dropped. When omitted, the model "
+            "proposes values freely across the fixed dimension keys (channel, "
+            "audience, freshness, season, time-slot), matching pre-v1.1 "
+            "behavior."
+        ),
+    )
     debug: bool = Field(
         False, description="Enable debug logging for the outgoing LLM call."
     )
