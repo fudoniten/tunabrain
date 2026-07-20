@@ -12,7 +12,12 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from tunabrain.api.models import CategoryDefinition, CategoryValue, EnrichProfileRequest
+from tunabrain.api.models import (
+    CategoryDefinition,
+    CategoryValue,
+    EnrichProfileRequest,
+    GroupContext,
+)
 from tunabrain.chains import directory_enrichment as prof_mod
 from tunabrain.chains.directory_enrichment import ProfileResult, enrich_profile
 
@@ -216,3 +221,83 @@ async def test_no_categories_preserves_freeform_behavior(stub_profile):
 
     assert resp.dimensions == {"channel": ["muse"]}
     assert "audience" not in resp.dimensions
+
+
+# --- request.context: operator-supplied grounding notes ---------------------
+#
+# Grout threads a directory profile's manually-set `context` (text/links) into
+# this field so an operator can correct a misclassification, e.g. "these are
+# retro VIDEO GAME ads, not vintage film content." Unlike per-item
+# MediaContext, links here are never fetched/summarized -- they're rendered
+# into the prompt as plain text alongside the free-form notes.
+
+
+@pytest.mark.anyio
+async def test_context_text_and_links_appear_in_prompt(stub_profile):
+    await enrich_profile(
+        _request(
+            context=GroupContext(
+                text="these are retro VIDEO GAME ads, not vintage film content",
+                links=["https://example.com/about-these-ads"],
+            )
+        )
+    )
+
+    rendered = "\n".join(str(m) for m in stub_profile["messages"])
+    assert "these are retro VIDEO GAME ads, not vintage film content" in rendered
+    assert "https://example.com/about-these-ads" in rendered
+
+
+@pytest.mark.anyio
+async def test_context_links_are_not_fetched(stub_profile, monkeypatch):
+    # Guard against ever silently adding a fetch step to this chain: no
+    # httpx/requests-style client should be touched just because a link was
+    # supplied. (There's no fetch machinery imported into this module at all
+    # today; this test documents the intent so a future change doesn't
+    # reintroduce it without a conscious decision.)
+    import tunabrain.chains.directory_enrichment as mod
+
+    assert not hasattr(mod, "httpx")
+    assert not hasattr(mod, "requests")
+
+    await enrich_profile(_request(context=GroupContext(links=["https://example.com/x"])))
+    # No exception, no network call attempted -- the stubbed LLM is the only
+    # thing invoked (see the `stub_profile` fixture).
+
+
+@pytest.mark.anyio
+async def test_no_context_omits_operator_context_section(stub_profile):
+    await enrich_profile(_request())
+
+    rendered = "\n".join(str(m) for m in stub_profile["messages"])
+    assert "Operator-provided context" not in rendered
+
+
+@pytest.mark.anyio
+async def test_blank_context_omits_operator_context_section(stub_profile):
+    # A GroupContext with no text and no links (e.g. Grout normalizes an
+    # empty edit to None before ever sending it, but defend here too) renders
+    # nothing -- no dangling "Operator-provided context:" header with no body.
+    await enrich_profile(_request(context=GroupContext()))
+
+    rendered = "\n".join(str(m) for m in stub_profile["messages"])
+    assert "Operator-provided context" not in rendered
+
+
+@pytest.mark.anyio
+async def test_context_combines_with_categories(stub_profile):
+    stub_profile["result"] = ProfileResult(
+        dimensions={"channel": ["toontown"], "audience": ["kids"]},
+        tags=["retro"],
+    )
+    resp = await enrich_profile(
+        _request(
+            categories=_CATEGORIES,
+            context=GroupContext(text="these are retro video game ads"),
+        )
+    )
+
+    rendered = "\n".join(str(m) for m in stub_profile["messages"])
+    assert "these are retro video game ads" in rendered
+    assert "toontown: Animated content" in rendered
+    assert resp.dimensions["channel"] == ["toontown"]

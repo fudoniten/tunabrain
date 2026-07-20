@@ -1360,6 +1360,37 @@ class EnrichDescribeResponse(BaseModel):
 # CostEstimate verbatim and never touches the existing enrichment schemas.
 
 
+class GroupContext(BaseModel):
+    """Operator-supplied grounding notes for a media group.
+
+    Unlike ``MediaContext`` (used by the per-item chains, which auto-searches
+    Wikipedia and can fetch/summarize a supplied link), the group-profiling
+    chain has no web-grounding step at all — filenames are its only content
+    signal. This model is purely operator-authored text handed to the model
+    as-is: links are echoed into the prompt as plain text, never fetched.
+
+    Typical use: correcting a misclassification, e.g. a directory of retro
+    video-game commercials that landed on a classic-film channel gets a note
+    like "these are retro VIDEO GAME ads, not vintage film content" so the
+    next classification pass gets it right.
+    """
+
+    text: str | None = Field(
+        None,
+        description=(
+            "Free-form operator notes about what this group actually "
+            "contains. Threaded into the prompt verbatim."
+        ),
+    )
+    links: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Reference URLs, echoed into the prompt as plain text for "
+            "context — NOT fetched or summarized."
+        ),
+    )
+
+
 class EnrichProfileRequest(BaseModel):
     """Request to derive a shared metadata profile for a group of related media.
 
@@ -1403,6 +1434,15 @@ class EnrichProfileRequest(BaseModel):
             "proposes values freely across the fixed dimension keys (channel, "
             "audience, freshness, season, time-slot), matching pre-v1.1 "
             "behavior."
+        ),
+    )
+    context: GroupContext | None = Field(
+        None,
+        description=(
+            "Optional operator-supplied grounding notes for this group, e.g. "
+            "correcting a prior bad classification ('these are retro VIDEO "
+            "GAME ads, not vintage film content'). Threaded into the prompt "
+            "verbatim; links are NOT fetched/summarized (unlike MediaContext)."
         ),
     )
     debug: bool = Field(
