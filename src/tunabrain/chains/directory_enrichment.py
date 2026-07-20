@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterable
 
 from langchain_core.exceptions import OutputParserException
 from langchain_core.output_parsers import PydanticOutputParser
@@ -25,18 +26,26 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableSerializable
 from pydantic import BaseModel, Field
 
-from tunabrain.api.models import CostEstimate, EnrichProfileRequest, EnrichProfileResponse
+from tunabrain.api.models import (
+    CategoryDefinition,
+    CategoryValue,
+    CostEstimate,
+    EnrichProfileRequest,
+    EnrichProfileResponse,
+)
+from tunabrain.chains.validation import partition_values
 from tunabrain.config import get_settings, is_debug_enabled
 from tunabrain.llm import get_chat_model
 from tunabrain.scheduling.cost import calculate_cost
 
 logger = logging.getLogger(__name__)
 
-# The controlled dimension keys the model may populate. Kept in sync with
-# Grout's config (:dimension-descriptions) and Tunarr Scheduler's catalog.
-# v1.1 will fetch the live allowed *values* from Tunarr Scheduler and constrain
-# the model to them; for v1 the model proposes values freely and Grout maps
-# them onto its own vocabulary.
+# The controlled dimension keys the model may populate when the caller does
+# not supply `categories` (back-compat with callers on older Grout builds).
+# Kept in sync with Grout's config (:dimension-descriptions) and Tunarr
+# Scheduler's catalog. When `categories` is supplied, the caller's dimension
+# names and candidate values are the source of truth instead — see
+# `_SYSTEM_PROMPT_WITH_CATEGORIES` and `_validate_and_fill_categories`.
 _DIMENSION_KEYS = ("channel", "audience", "freshness", "season", "time-slot")
 
 _SYSTEM_PROMPT = (
@@ -58,6 +67,35 @@ _SYSTEM_PROMPT = (
     "- For 'freshness', 'season', 'time-slot': set them only on a clear signal. "
     "When in doubt, omit the dimension.\n"
     "- Prefer fewer, more confident dimensions over many speculative ones.\n"
+    "- tags: 3-7 short lowercase tags describing the group's typical content "
+    "(e.g. 'music', 'music-theory', 'educational', 'jazz'). Lowercase, "
+    "hyphenated, no spaces or special characters."
+)
+
+# Used instead of `_SYSTEM_PROMPT` when the caller supplies `categories`: the
+# model is handed a closed vocabulary per dimension (fetched by Grout from
+# Tunarr Scheduler) rather than proposing values freely, and every listed
+# dimension is mandatory rather than omit-if-unsure.
+_SYSTEM_PROMPT_WITH_CATEGORIES = (
+    "You are a media librarian classifying a GROUP of related media items that "
+    "share one organizing concept (a channel, creator, series, or directory). "
+    "You are given the group's name, a sample of its filenames, and a "
+    "controlled vocabulary of dimensions with their candidate values — "
+    "nothing else. Derive a profile that describes the group as a whole.\n\n"
+    "Rules:\n"
+    "- Base your analysis ONLY on the concept name and the filenames. Do NOT "
+    "hallucinate facts about the actual video content.\n"
+    "- dimensions: a JSON object mapping each dimension name below to a list "
+    "of one or more values, chosen ONLY from that dimension's candidate "
+    "values. Never invent a value outside the candidates.\n"
+    "- Every dimension listed below MUST get at least one value. If no "
+    "candidate is a confident fit, pick the single closest candidate rather "
+    "than omitting the dimension.\n"
+    "- For 'channel' (when listed), derive a single best value from the "
+    "concept name (e.g. 'Adam Neely Music' -> a music channel; 'Tom Scott' -> "
+    "a general/variety channel).\n"
+    "- Prefer fewer, more confident values per dimension over many "
+    "speculative ones.\n"
     "- tags: 3-7 short lowercase tags describing the group's typical content "
     "(e.g. 'music', 'music-theory', 'educational', 'jazz'). Lowercase, "
     "hyphenated, no spaces or special characters."
@@ -109,16 +147,98 @@ def _sanitize_tag(tag: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", tag.strip().lower()).strip("-")
 
 
-def _clean_dimensions(dimensions: dict[str, list[str]]) -> dict[str, list[str]]:
+def _clean_dimensions(
+    dimensions: dict[str, list[str]], allowed_keys: Iterable[str]
+) -> dict[str, list[str]]:
     """Keep only known dimension keys with at least one non-blank value."""
+    allowed = set(allowed_keys)
     cleaned: dict[str, list[str]] = {}
     for key, values in dimensions.items():
-        if key not in _DIMENSION_KEYS:
+        if key not in allowed:
             continue
         vals = [v.strip() for v in values if isinstance(v, str) and v.strip()]
         if vals:
             cleaned[key] = vals
     return cleaned
+
+
+def _normalize_category_values(
+    values: list[str] | list[CategoryValue],
+) -> list[tuple[str, str | None]]:
+    """Normalize category values to a list of (value, description) tuples.
+
+    Mirrors :func:`chains.categorization._normalize_category_values` — kept as
+    a separate copy rather than a shared import since each chain's usage is a
+    small, single call site.
+    """
+    result: list[tuple[str, str | None]] = []
+    for v in values:
+        if isinstance(v, CategoryValue):
+            result.append((v.value, v.description))
+        elif isinstance(v, dict):
+            result.append((v.get("value", str(v)), v.get("description")))
+        else:
+            result.append((str(v), None))
+    return result
+
+
+def _format_categories_block(categories: dict[str, CategoryDefinition]) -> str:
+    """Render the caller-supplied dimensions as a candidate-value prompt block.
+
+    Mirrors :func:`chains.categorization._categorize_single`'s per-value
+    formatting so the model sees the same style of controlled vocabulary,
+    just for every dimension in one call instead of one call per dimension.
+    """
+    lines: list[str] = []
+    for dim_name, definition in categories.items():
+        lines.append(f"- {dim_name}: {definition.description}")
+        for value, description in _normalize_category_values(definition.values):
+            if description:
+                lines.append(f"    - {value}: {description}")
+            else:
+                lines.append(f"    - {value}")
+    return "\n".join(lines)
+
+
+def _validate_and_fill_categories(
+    dimensions: dict[str, list[str]],
+    categories: dict[str, CategoryDefinition],
+) -> dict[str, list[str]]:
+    """Enforce the controlled vocabulary for every requested dimension.
+
+    Filters out hallucinated values (not present in the dimension's candidate
+    list, via :func:`chains.validation.partition_values`) and guarantees each
+    requested dimension ends up with at least one value — falling back to its
+    first candidate when the model omitted the dimension or every value it
+    proposed was invalid. A dimension with no configured candidates is passed
+    through unfiltered since there is nothing to validate against.
+    """
+    result: dict[str, list[str]] = {}
+    for dim_name, definition in categories.items():
+        allowed = [value for value, _ in _normalize_category_values(definition.values)]
+        if not allowed:
+            existing = dimensions.get(dim_name)
+            if existing:
+                result[dim_name] = existing
+            continue
+
+        valid, invalid = partition_values(dimensions.get(dim_name, []), allowed)
+        if invalid:
+            logger.warning(
+                "Dropping hallucinated value(s) for dimension '%s': %s (valid options: %s)",
+                dim_name,
+                invalid,
+                allowed,
+            )
+        if not valid:
+            logger.warning(
+                "Dimension '%s' had no valid value; falling back to '%s'",
+                dim_name,
+                allowed[0],
+            )
+            valid = [allowed[0]]
+        result[dim_name] = valid
+    return result
 
 
 def _clean_tags(tags: list[str]) -> list[str]:
@@ -140,10 +260,19 @@ async def enrich_profile(
 ) -> EnrichProfileResponse:
     """Derive a shared dimensions+tags profile for a media group.
 
-    A single LLM call grounded on the concept name + sampled filenames. Output
+    A single LLM call grounded on the concept name + sampled filenames (plus
+    `request.categories`, when supplied, as a controlled vocabulary). Output
     is sanitized (known dimension keys only; lowercase-hyphenated tags) and
     degrades gracefully: an LLM or parse failure yields an empty profile plus a
     warning, never a raised exception.
+
+    When `request.categories` is supplied, every listed dimension is
+    guaranteed at least one value (via `_validate_and_fill_categories`) and
+    any hallucinated value outside its candidate list is dropped — this is
+    the caller-provided controlled vocabulary path (see
+    `grout.tunarr_scheduler/fetch-value-descriptions!`). Without it, the
+    model proposes values freely across the fixed `_DIMENSION_KEYS`, matching
+    pre-v1.1 behavior.
     """
     debug = is_debug_enabled(request.debug)
     logger.info(
@@ -152,17 +281,32 @@ async def enrich_profile(
         len(request.sample_filenames),
     )
 
+    categories = request.categories or {}
     warnings: list[str] = []
     llm_instance = llm or get_chat_model()
 
     parser = PydanticOutputParser(pydantic_object=ProfileResult)
+
+    if categories:
+        system_prompt = _SYSTEM_PROMPT_WITH_CATEGORIES
+        categories_section = (
+            "Dimensions and their candidate values:\n"
+            f"{_format_categories_block(categories)}\n\n"
+        )
+        allowed_keys: Iterable[str] = categories.keys()
+    else:
+        system_prompt = _SYSTEM_PROMPT
+        categories_section = ""
+        allowed_keys = _DIMENSION_KEYS
+
     prompt = ChatPromptTemplate.from_messages(
         [
-            ("system", _SYSTEM_PROMPT),
+            ("system", system_prompt),
             (
                 "human",
                 "Group concept name: {concept_name}\n\n"
                 "Sample filenames from this group:\n{filenames_block}\n\n"
+                "{categories_section}"
                 "Return only the JSON dictated by the format instructions."
                 "{format_instructions}",
             ),
@@ -172,6 +316,7 @@ async def enrich_profile(
     inputs = {
         "concept_name": request.concept_name,
         "filenames_block": filenames_block,
+        "categories_section": categories_section,
         "format_instructions": f"\n\n{parser.get_format_instructions()}",
     }
     if debug:
@@ -185,7 +330,9 @@ async def enrich_profile(
         if debug:
             logger.debug("LLM raw response (enrich-profile): %s", response)
         result = await parser.ainvoke(response)
-        dimensions = _clean_dimensions(result.dimensions)
+        dimensions = _clean_dimensions(result.dimensions, allowed_keys)
+        if categories:
+            dimensions = _validate_and_fill_categories(dimensions, categories)
         tags = _clean_tags(result.tags)
         if not dimensions and not tags:
             warnings.append("model returned no usable dimensions or tags")
