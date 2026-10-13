@@ -2,7 +2,7 @@
   description = "TunaBrain FastAPI service";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     flake-utils.url = "github:numtide/flake-utils";
     nix-helpers = {
       url = "github:fudoniten/fudo-nix-helpers";
@@ -110,6 +110,13 @@
             pkgs.python312Packages.pytest-asyncio
             pkgs.python312Packages.anyio
           ];
+          env = {
+            # Dummy key for the sandboxed check: the suite is fully
+            # mocked, but conftest.py gates the session on this var.
+            # A real key must never live in a derivation (/nix/store
+            # is world-readable).
+            OPENAI_API_KEY = "sk-test-dummy-not-a-real-key";
+          };
 
           buildPhase = ''
             runHook preBuild
