@@ -1,47 +1,58 @@
-# Tuna Brain
+# Tunabrain
 
-Tuna Brain is a FastAPI service that wraps upstream LLMs with LangChain to support
-Tunarr Scheduler. It tags media, maps media to channels, authors layered TV
-programming grids, and produces bumpers for upcoming programming blocks.
+Tunabrain is the LLM gateway for the Pseudovision ecosystem: a stateless
+FastAPI service that wraps upstream models (via LangChain) behind typed,
+purpose-built endpoints. Every AI call in the ecosystem goes through it, so no
+other service holds model keys.
+
+- **Tunarr Scheduler** calls it to categorize and tag media, govern tags,
+  author quarterly grids and monthly overrides, review grids, and make bumper
+  art.
+- **Grout** calls it to enrich filler and long-form clips (`/enrich/*`).
+
+Tunabrain keeps no state; TS and Grout own everything it produces.
+
+Deployed at `https://tunabrain.kube.sea.fudo.link` (in-cluster:
+`tunabrain.arr.svc.cluster.local:5546`).
+
+Ongoing work lives in [PLAN.md](PLAN.md). Conventions and pitfalls for
+contributors are in [AGENTS.md](AGENTS.md). The scheduling wire contracts and
+the grid expansion algorithm are specified in
+[docs/scheduling-grid-spec.md](docs/scheduling-grid-spec.md).
 
 ## Project layout
 
-- `src/tunabrain/app.py`: FastAPI application factory and router wiring.
-- `src/tunabrain/api/models.py`: Pydantic models for request/response payloads.
-- `src/tunabrain/api/routes.py`: HTTP endpoints for tagging, channel mapping,
-  layered-grid scheduling (`/api/scheduling/*`), and bumpers.
-- `src/tunabrain/scheduling/`: the layered-grid scheduling pipeline —
-  `quarterly_grid.py` (two-pass dayparting + strip-fill, plus repair),
-  `monthly_overrides.py` (sparse overrides against a frozen grid), `grid.py`
-  (the shared Pydantic contracts), `expander.py` (the golden Grid+Overrides
-  → DailySlot conformance suite tunarr-scheduler ports). See
-  `docs/scheduling-grid-spec.md` and `AGENTS.md` for the authoritative design
-  and the live endpoint list.
-- `src/tunabrain/chains/`: LangChain-powered workflow stubs (tagging, channel
-  mapping, enrichment, bumpers), ready to be implemented.
-- `src/tunabrain/tools/`: LangChain-compatible tools (e.g., Wikipedia lookup) available to
-  chains.
-- `flake.nix`: Nix flake for a reproducible development shell with Python dependencies.
-- `pyproject.toml`: Project metadata and Python dependencies.
+```
+src/tunabrain/
+├── app.py, __main__.py   FastAPI app and `python -m tunabrain` entry point
+├── config.py, llm.py     env-var config and per-task model routing
+├── api/                  routes.py (every endpoint) and models.py (Pydantic payloads)
+├── chains/               one LangChain workflow per task (tagging, categorization,
+│                         enrichment, tag governance, bumpers, ...)
+├── scheduling/           grid.py (the scheduling contracts), quarterly_grid.py,
+│                         monthly_overrides.py, review.py, expander.py (reference
+│                         implementation for TS's port)
+├── stt/, keyframes/      speech-to-text and keyframe captioning for /enrich/long-form
+└── tools/                LangChain tools (Wikipedia lookup, title helpers)
+tests/                    pytest suites, incl. the golden expander conformance tests
+```
 
 ## Development
 
-### Using Nix
-
 ```bash
-nix develop
+nix develop                     # Python 3.12 with all deps, pytest, ruff
+python -m tunabrain             # listens on :8000 (--port to change)
+curl localhost:8000/health
 ```
 
-This provides a Python 3.11 environment with FastAPI, Uvicorn, Pydantic, and LangChain.
-
-### Running the API
+### Testing
 
 ```bash
-python -m tunabrain
+pytest                          # full suite; no network or LLM needed
+pytest tests/test_grid_expander.py
+ruff check .
+nix flake check                 # the same pytest run, against the locked env
 ```
-
-The service will start on port 8000. The `/health` endpoint can be used to verify
-startup.
 
 ### Configuring the LLM backend
 
@@ -59,6 +70,11 @@ task with no override falls back to `TUNABRAIN_LLM_MODEL`:
 - `TUNABRAIN_SHOW_LLM_MODEL`: show tagging.
 - `TUNABRAIN_EPISODE_LLM_MODEL`: episode special-flag detection.
 - `TUNABRAIN_SCHEDULE_LLM_MODEL`: quarterly grid / schedule building.
+- `TUNABRAIN_REVIEW_LLM_MODEL`: grid review and revision.
+- `TUNABRAIN_BUMPERS_LLM_MODEL`: bumper image generation.
+
+`TUNABRAIN_ENABLE_WIKIPEDIA_SEARCH` (default on) lets chains ground answers
+on Wikipedia lookups.
 
 Tagging and flagging are cheap, low-stakes, and run at high volume, so a small
 fast model is a good fit. Quarterly scheduling is the opposite — it reasons over
@@ -118,33 +134,26 @@ extract audio and keyframes.
 
 ### Endpoints
 
-- `POST /tags`: Generate scheduling-oriented tags for a media item.
-- `POST /categorize`: Categorize a media item across caller-supplied dimensions.
-- `POST /channel-mapping`: Associate a media item with matching channels (deprecated; use the `channel` dimension in `/categorize`).
-- `POST /bumpers`: Produce bumpers tailored to a schedule.
-- `POST /enrich/short-form`: One-call enrichment for short-form media (bumpers,
-  fillers, ads, music videos). Orchestrates `/categorize` + `/tags`; no STT.
-- `POST /enrich/long-form`: One-call enrichment for long-form media
-  (documentaries, video essays, interviews). Fetches the media, extracts audio,
-  transcribes it (STT), optionally captions keyframes, then runs
-  `/categorize` + `/tags` grounded on the transcript.
+The live list is at `GET /openapi.json`.
 
-### Layered-grid scheduling endpoints
+| Endpoint | Purpose | Caller |
+|---|---|---|
+| `POST /categorize` | Categorize media across caller-supplied dimensions | TS |
+| `POST /tags` | Free-form scheduling tags for a media item | TS |
+| `POST /tags/audit`, `POST /tag-governance/triage` | Recommend tag deletions; keep/remove/rename decisions | TS |
+| `POST /tags/episode-special-flag` | Flag special episodes | TS |
+| `POST /bumpers` | Bumper art (base64 PNG) and theme | TS |
+| `POST /enrich/short-form` | Categorize + tag filler, bumpers, ads (no STT) | Grout |
+| `POST /enrich/long-form` | Fetch → STT (+ keyframe captions) → categorize + tag | nobody yet (Grout should) |
+| `POST /enrich/profile` | One shared profile for a directory group | Grout |
+| `POST /enrich/describe` | Name/description; used inside `/enrich/short-form` | internal |
+| `POST /api/scheduling/propose-quarterly-grid` | Propose a channel's frozen grid in one call | TS |
+| `POST /api/scheduling/propose-daypart-skeleton`, `propose-strip-fill` | The same proposal as two round trips, so TS can supply a duration-feasible menu | TS |
+| `POST /api/scheduling/repair-quarterly-grid` | Repair a grid against a feasibility report | TS |
+| `POST /api/scheduling/review-grid`, `revise-grid` | Taste review of a concrete week, and revision | TS |
+| `POST /api/scheduling/propose-monthly-overrides` | Sparse monthly overrides against a frozen grid | TS |
+| `POST /channel-mapping` | Deprecated; use the `channel` dimension in `/categorize` | none |
+| `POST /api/scheduling/get-{quarterly,monthly}-strategy` | Strategy proposals with placeholder cost estimates | none |
+| `GET /health`, `GET /api/version` | Liveness and build info | |
 
-These are the live scheduling API — see `AGENTS.md` for the full request/response
-shapes and `docs/scheduling-grid-spec.md` for the authoritative design:
-
-- `POST /api/scheduling/propose-quarterly-grid`: propose a channel's frozen
-  quarterly Grid (two-pass dayparting + strip-fill).
-- `POST /api/scheduling/propose-daypart-skeleton` / `propose-strip-fill`: the
-  same two passes as a split round trip, so the caller can compute a
-  duration-feasible candidate menu between them.
-- `POST /api/scheduling/repair-quarterly-grid`: targeted repair against a
-  deterministic feasibility report.
-- `POST /api/scheduling/propose-monthly-overrides`: sparse monthly overrides
-  against a frozen grid.
-
-(`POST /schedule`, an earlier LangGraph-agent-based scheduler, was removed —
-it implemented only 2 of a planned 7 tools and was superseded by the
-endpoints above before it ever had a production caller.)
-
+The endpoints with no caller are slated for removal (see [PLAN.md](PLAN.md)).

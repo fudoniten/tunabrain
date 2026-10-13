@@ -1,9 +1,13 @@
-# Grid-Based Scheduling — Phase 0 Contract & Expansion Spec
+# Grid-Based Scheduling — Contracts & Expansion Spec
 
 This document defines the integration contracts and the deterministic expansion
 algorithm for the layered scheduling design. It is the single source of truth
 for both the Python reference implementation in this repo and the production
 implementation in **Tunarr Scheduler (Clojure)**.
+
+It's kept as a separate document because it is a cross-repo contract: TS's
+`scheduling/contracts.clj`, `expander.clj`, and their golden tests must match it
+exactly.
 
 ## 1. Motivation
 
@@ -38,12 +42,13 @@ not a schedule change.
 Pseudovision (media server / playout)
   ├─ owns the raw library, runtimes, watched status
   ├─ exposes catalog aggregates  ──►  CatalogProfile (built by Tunarr)
-  ├─ resolves media_id ("series:seinfeld") ──► concrete episode at air time
-  └─ consumes the expanded DailySlot stream and streams the channels
+  ├─ runs the native schedule engine that Tunarr syncs the frozen grid onto,
+  │  resolving media_id ("series:seinfeld") to a concrete episode at air time
+  └─ streams the channels
 
 Tunarr Scheduler (Clojure control plane, stateful)
   ├─ stores the frozen Grid + the Override list (system of record)
-  ├─ runs the deterministic expander  (this spec)
+  ├─ runs the deterministic expander (this spec) for previews and review
   ├─ runs the feasibility checker  ──►  FeasibilityReport
   ├─ drives the propose → check → repair loop
   └─ hosts the GUI checkpoints (approve skeleton, approve grid)
@@ -130,34 +135,33 @@ identical inputs; `tests/test_grid_expander.py` pins the behaviors that matter
 (determinism, weekly identity, partial override, specificity cascade,
 cross-midnight, default fill).
 
-## 7. How the layers are authored (Phases 4–6, not yet built)
+## 7. How the layers are authored
 
-- **Quarterly (Pass A → Pass B → check → repair).** Pass A proposes the
-  `DaypartSkeleton` (coarse, one screen). Pass B fills `GridStrip`s per daypart
-  against the `CatalogProfile`. Tunarr runs the feasibility checker and feeds any
-  `FeasibilityReport` shortfalls back to Tunabrain for a targeted repair. The LLM
-  never does capacity math and never sees raw media.
+- **Quarterly (propose → check → repair → review).** Tunabrain proposes the
+  grid, either in one call (`propose-quarterly-grid`) or as two round trips
+  (`propose-daypart-skeleton`, then `propose-strip-fill` with a
+  duration-feasible candidate menu that Tunarr computes between them). Tunarr
+  runs the feasibility checker and feeds any `FeasibilityReport` shortfalls
+  back to `repair-quarterly-grid`, then optionally runs a taste review over one
+  expanded week (`review-grid` / `revise-grid`). The LLM never does capacity
+  math and never sees raw media.
 - **Monthly.** Given the frozen grid as context, Tunabrain emits only the
   `Override` deltas for the month — usually a short list, often empty.
-- **Weekly.** Tunarr calls `expand(...)`. No Tunabrain call.
+- **Delivery.** Tunarr syncs the frozen grid onto Pseudovision's native
+  schedule engine. Monthly overrides currently reach Pseudovision through a
+  weekly `expand(...)` → `DailySlot` push; that push is being retired in favor
+  of applying overrides through the native engine as well. `expand(...)` stays
+  as the definition of what a week looks like, used for previews and review.
 
-## 8. Open items deferred past Phase 0
+## 8. Extensions and open items
 
-- `Override.mode` currently only supports `"replace"`; `"insert"` / `"preempt"`
-  semantics are future work.
-- Richer override scopes ("2nd Tuesday", "last Friday") beyond specific-date and
-  weekday-pattern.
-- ~~The `query_media_count` pull tool (Phase 7) for feasibility questions the
-  `CatalogProfile` did not pre-answer.~~ **Done, differently.** Rather than an
-  ad hoc pull tool (which would require Tunabrain to hold state across calls,
-  against this design's own stateless invariant), Tunarr Scheduler now
-  precomputes a per-daypart duration-feasible slot menu
-  (`DaypartCandidate`/`CandidateSlot`, this file) and hands it to
-  `propose_strip_fill` — see `quarterly_grid.py`'s `propose_daypart_skeleton`/
-  `propose_strip_fill` (the two-round-trip split of the original
-  `propose_quarterly_grid`) and tunarr-scheduler's
-  `DURATION_AWARE_SCHEDULING.md` (Phase 3) for the full design and as-built
-  record. Also added: `CatalogProfile.tag_runtime_histograms`
-  (`TagRuntimeHistogram`, dimensioning the runtime histogram per tag) and a
-  matching feasibility duration-fit finding in tunarr-scheduler's
-  `feasibility.clj` — both extensions to the contracts in this file.
+- **Duration-feasible candidate menus.** Instead of a stateful pull tool,
+  Tunarr precomputes a per-daypart menu of duration-feasible slots
+  (`DaypartCandidate` / `CandidateSlot` in `grid.py`) and hands it to
+  `propose_strip_fill`. `CatalogProfile.tag_runtime_histograms`
+  (`TagRuntimeHistogram`) and a matching duration-fit finding in Tunarr's
+  `feasibility.clj` back it up. The design record is archived in
+  tunarr-scheduler as `archive/DURATION_AWARE_SCHEDULING.md`.
+- **Open:** `Override.mode` only supports `"replace"`; `"insert"` / `"preempt"`
+  semantics are future work, as are richer override scopes ("2nd Tuesday",
+  "last Friday").
