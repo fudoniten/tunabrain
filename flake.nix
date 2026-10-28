@@ -64,6 +64,9 @@
           in helpers.deployContainers {
             name = "tunabrain";
             repo = "registry.kube.sea.fudo.link";
+            # The registry is LAN-only and unauthenticated; without this the helper
+            # refuses to push unless skopeo has a stored login for it.
+            requireAuth = false;
             tags = [ "latest" versionInfo.versionTag ];
             entrypoint = [ "${tunabrain}/bin/tunabrain-server" ];
             verbose = true;
